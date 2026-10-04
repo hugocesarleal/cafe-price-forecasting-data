@@ -1,0 +1,67 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+pip-selfcheck.json
+
+# ============================================================
+# Ambientes e Configurações Locais
+# ============================================================
+.env
+# .env.example é commitado intencionalmente
+
+# ============================================================
+# Banco de Dados Local / Arquivos de Trabalho
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# Cluster PostgreSQL temporário de testes (criado por initdb)
+pg_test_cluster/
+pg_test.log
+
+# ============================================================
+# Artefatos de Build / Dados Gerados
+# ============================================================
+base/base_modelo.csv
+base_modelo.csv
+*.csv
+
+# EXCEÇÃO: CSVs de dados manuais históricos são versionados
+!base/dados_manuais/*.csv
+
+# ============================================================
+# Logs e Temporários
+# ============================================================
+*.log
+logs/
+
+# Scripts de diagnóstico temporários
+inspect_sqlite.py
+check_weather_nulls.py
+
+# ============================================================
+# Pytest e Cobertura
+# ============================================================
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.coveragerc
+
+# ============================================================
+# IDEs
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
