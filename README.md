@@ -72,11 +72,11 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── logging_config.py        # Logging estruturado
 │   ├── migrator.py              # Executor de migrations versionadas
 │   ├── sqlite_migrator.py       # Migração SQLite legado → PostgreSQL
+│   ├── agrobr_client.py         # Adaptador Agro.br (modo real/simulado)
+│   ├── validation.py            # 12 checagens de qualidade e limites físicos
+│   ├── ingestion.py             # Pipeline raw → staging → core (15 passos)
 │   │
 │   │   — Em implementação —
-│   ├── agrobr_client.py         # Adaptador Agro.br (modo real/simulado)
-│   ├── ingestion.py             # Coleta, hash, registro em raw
-│   ├── validation.py            # Checagens de qualidade e limites físicos
 │   ├── transformations.py       # Features derivadas causais
 │   ├── feature_builder.py       # Filtro KEEP + geração dos alvos y_7d…y_90d
 │   ├── dataset_versioning.py    # Snapshots imutáveis com checksum
@@ -142,11 +142,46 @@ python -m src.migrator
 python -m src.sqlite_migrator
 ```
 
-### 5. Executar os testes
+### 5. Executar a ingestão
+
+```bash
+python -m src.ingestion
+```
+
+O comando imprime as métricas da execução em JSON. O fluxo é: coleta (`AGROBR_MODE`) → registro do hash em `raw.ingestion_files` → brutos em `raw` → 12 validações → `staging` → upsert em `core`.
+
+Comportamentos que valem atenção:
+
+| Situação | Resultado |
+|---|---|
+| Hash da origem não mudou | Nada é republicado; execução termina `SUCCESS` com 0 registros |
+| Linha inválida (tipo, nulo, fora do limite) | Vai para `raw` com `validation_status='INVALID'` e não chega a `staging` |
+| Checagem **CRÍTICA** reprovada | Publicação interrompida, `core` permanece intacto, execução `FAILED` |
+| Checagem de **ALERTA** reprovada | Registrada em `audit.data_quality_checks`, mas não bloqueia |
+| Outra execução em andamento | `pg_try_advisory_lock` nega; execução termina `BLOCKED` sem tocar nos dados |
+| Falha de coleta | Novas tentativas com espera exponencial até `AGROBR_MAX_RETRIES`; só `SourceFetchError` é repetida |
+
+Para reprocessar uma janela específica, use a API Python:
+
+```python
+from datetime import date
+from src.ingestion import run_ingestion
+
+# start_date/end_date valem para AGROBR_MODE=simulated, que é quem aceita janela.
+run_ingestion(cutoff_date=date(2026, 1, 1), start_date=date(2025, 1, 1))
+```
+
+`cutoff_date` é a data-limite da validação "ausência de informação futura" e vale nos dois modos. Os demais argumentos são repassados ao cliente de coleta.
+
+Toda execução fica auditada em `audit.pipeline_runs` (status, contagens, erro) e em `audit.data_quality_checks` (uma linha por checagem).
+
+### 6. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais.
 
 ---
 
@@ -214,16 +249,19 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 python -m pytest tests/ -v --tb=short
 ```
 
-| Arquivo de Teste | Casos cobertos |
-|---|---|
-| `test_schema.py` | Schemas, tabelas e seed do catálogo |
-| `test_sqlite_migration.py` | Migração legado, paridade de contagem, spot-check de valor, idempotência |
-| `test_ingestion.py` | *(em desenvolvimento)* Coleta Agro.br, hash, registro em raw |
-| `test_validation.py` | *(em desenvolvimento)* Limites físicos, tipos, nulos |
-| `test_no_future_leakage.py` | *(em desenvolvimento)* Anti-leakage matemático |
-| `test_feature_catalog.py` | *(em desenvolvimento)* Isolamento KEEP vs DROP |
-| `test_pruning.py` | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw |
-| `test_model_contract.py` | *(em desenvolvimento)* Consumidor simulado e registro de previsões |
+| Arquivo de Teste | Casos | Cobertura |
+|---|---|---|
+| `test_schema.py` | 3 | Schemas, tabelas obrigatórias e seed do catálogo |
+| `test_sqlite_migration.py` | 8 | Migração legado, paridade de contagem, spot-check de valor, idempotência |
+| `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
+| `test_ingestion.py` | 16 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10) e lock concorrente (11) |
+| `test_idempotency.py` | 9 | Carga repetida não duplica (3), deduplicação dentro e entre origens (4), upsert sem duplicar datas e com `COALESCE` (5) |
+| `test_no_future_leakage.py` | — | *(em desenvolvimento)* Anti-leakage matemático (16) |
+| `test_feature_catalog.py` | — | *(em desenvolvimento)* Isolamento KEEP vs DROP (14, 15, 17–20) |
+| `test_pruning.py` | — | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw (12, 13) |
+| `test_model_contract.py` | — | *(em desenvolvimento)* Consumidor simulado e registro de previsões |
+
+Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 11 deles já estão implementados.
 
 ---
 
