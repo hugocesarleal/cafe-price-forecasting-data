@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Timezone e Execução
     TIMEZONE: str = "America/Sao_Paulo"
     UPDATE_TIME: str = "00:00"
+    AFTER_CLOSE_TIME: str = "19:00"
+    BEFORE_OPEN_TIME: str = "08:00"
+    JOB_MAX_RETRIES: int = 2
+    JOB_RETRY_WAIT_SECONDS: int = 60
 
     # Agro.br / Modo de Coleta
     AGROBR_MODE: str = "simulated"

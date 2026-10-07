@@ -15,7 +15,8 @@ Implementa os passos 1 a 9 e 15 do fluxo descrito em ``docs/architecture.md``:
 
 Garantias:
 
-* **Idempotência** — origens cujo hash não mudou são ignoradas; a publicação em
+* **Idempotência** — origens cujo hash não mudou desde a última carga bem
+  sucedida são ignoradas; a publicação em
   ``core`` usa ``ON CONFLICT DO UPDATE`` com ``COALESCE``, então executar duas
   vezes não duplica nem sobrescreve valores existentes por NULL.
 * **Falha crítica não publica** — se alguma checagem CRÍTICA reprova, nada vai
@@ -64,10 +65,15 @@ _INSERT_INGESTION_FILE = """
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
+# Só vale como "carga anterior" a de uma execução que terminou em SUCCESS: se a
+# última tentativa falhou depois de registrar o arquivo, o conteúdo ainda não
+# chegou a core e precisa ser processado de novo.
 _ULTIMO_HASH = """
-    SELECT file_hash FROM raw.ingestion_files
-    WHERE source_name = %s AND file_name = %s AND pipeline_run_id <> %s
-    ORDER BY collected_at DESC
+    SELECT f.file_hash FROM raw.ingestion_files f
+    JOIN audit.pipeline_runs r ON r.run_id = f.pipeline_run_id
+    WHERE f.source_name = %s AND f.file_name = %s AND f.pipeline_run_id <> %s
+      AND r.status = 'SUCCESS'
+    ORDER BY f.collected_at DESC
     LIMIT 1
 """
 
@@ -129,8 +135,13 @@ class IngestionPipeline:
         self,
         cutoff_date: Optional[date] = None,
         min_records: int = 1,
+        force: bool = False,
     ) -> Dict[str, Any]:
-        """Executa a ingestão e devolve as métricas da execução."""
+        """Executa a ingestão e devolve as métricas da execução.
+
+        ``force`` reprocessa também as origens cujo hash não mudou — é o que um
+        reprocessamento manual de período precisa.
+        """
         run_id = uuid.uuid4()
         conn = self._conn or get_connection()
         fecha_conexao = self._conn is None
@@ -150,7 +161,7 @@ class IngestionPipeline:
                         "blocked_reason": str(exc)}
 
             with stack:
-                return self._execute(conn, run_id, cutoff_date, min_records)
+                return self._execute(conn, run_id, cutoff_date, min_records, force)
 
         except Exception as exc:
             # A transação pode estar abortada; precisa de rollback antes de auditar.
@@ -285,6 +296,7 @@ class IngestionPipeline:
         run_id: uuid.UUID,
         cutoff_date: Optional[date],
         min_records: int,
+        force: bool = False,
     ) -> Dict[str, Any]:
         coletados: List[SourceFile] = self.client.fetch()
         logger.info("Coleta concluída: %d origens.", len(coletados))
@@ -292,7 +304,7 @@ class IngestionPipeline:
         alterados: List[Tuple[SourceFile, uuid.UUID]] = []
         for source_file in coletados:
             file_id, has_changed = self._register_file(conn, run_id, source_file)
-            if has_changed:
+            if has_changed or force:
                 alterados.append((source_file, file_id))
 
         metricas: Dict[str, Any] = {
@@ -300,6 +312,7 @@ class IngestionPipeline:
             "arquivos_coletados": len(coletados),
             "arquivos_alterados": len(alterados),
             "arquivos_inalterados": len(coletados) - len(alterados),
+            "forcado": force,
             "raw_market": 0,
             "raw_weather": 0,
             "raw_invalidos": 0,
@@ -420,12 +433,13 @@ def run_ingestion(
     mode: Optional[str] = None,
     cutoff_date: Optional[date] = None,
     min_records: int = 1,
+    force: bool = False,
     **client_kwargs,
 ) -> Dict[str, Any]:
     """Atalho para executar a ingestão com o cliente configurado."""
     client = get_agrobr_client(mode=mode, **client_kwargs)
     return IngestionPipeline(client=client).run(
-        cutoff_date=cutoff_date, min_records=min_records)
+        cutoff_date=cutoff_date, min_records=min_records, force=force)
 
 
 if __name__ == "__main__":

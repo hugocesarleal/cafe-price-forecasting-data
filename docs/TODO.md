@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As etapas **1–6 estão concluídas**; as etapas **7–8 estão pendentes** — o que resta é o agendamento dos jobs, a poda da janela histórica com seus testes e o runbook (banco, ingestão, features, versionamento e contrato com o modelo já estão prontos).
+O documento define **8 etapas de entrega**. As etapas **1–7 estão concluídas**; a etapa **8 está em andamento** — o que resta é a poda da janela histórica com seus testes e o runbook (banco, ingestão, features, versionamento, contrato com o modelo e jobs já estão prontos).
 
 ---
 
@@ -125,16 +125,33 @@ O documento define **8 etapas de entrega**. As etapas **1–6 estão concluídas
 > - No conflito `(reference_date, horizon_days, model_version)` a previsão é atualizada. Além dos três campos do contrato original, o upsert atualiza `target_date`, `pipeline_run_id` e `forecast_status`.
 > - `create_dataset_version` e `register_forecasts` não fazem commit; `run_dataset_build` e `run_mock_forecast` fazem.
 
-## Etapa 7 — Agendamento ❌ PENDENTE
+## Etapa 7 — Agendamento ✅ CONCLUÍDA
 
-- [ ] Criar a pasta **`jobs/`** (não existe):
-  - [ ] `update_daily.py` — job diário às 00:00, fuso `America/Sao_Paulo`
-  - [ ] `update_after_close.py` — preparado para execução após fechamento do mercado
-  - [ ] `update_before_open.py` — preparado para execução antes da abertura
-  - [ ] reprocessamento manual de um período
-  - [ ] execução sob demanda
-  - [ ] retry seguro após falha
-- [ ] Sem duplicar dados/previsões entre jobs; registrar hora da última observação disponível e da última ingestão
+- [x] **`src/pipeline.py`** — orquestrador do ciclo completo (ingestão → features → versão), com uma execução "mãe" auditada por job e um único advisory lock para o ciclo inteiro
+- [x] Pasta **`jobs/`**:
+  - [x] `update_daily.py` — job diário às 00:00 (`UPDATE_TIME`), fuso `America/Sao_Paulo`; fecha o dia anterior
+  - [x] `update_after_close.py` — após o fechamento do mercado (`AFTER_CLOSE_TIME`); fecha o próprio dia
+  - [x] `update_before_open.py` — antes da abertura (`BEFORE_OPEN_TIME`); revisa o dia anterior
+  - [x] `reprocess_period.py` — reprocessamento manual de um período (`--start`/`--end`)
+  - [x] `run_on_demand.py` — execução sob demanda (`--cutoff`, `--force`)
+  - [x] retry seguro após falha — `jobs/runner.py` repete o ciclo após erro inesperado (`JOB_MAX_RETRIES`, `JOB_RETRY_WAIT_SECONDS`)
+- [x] Sem duplicar dados/previsões entre jobs: origem inalterada não é republicada, conteúdo idêntico reaproveita a versão do dataset e previsões são gravadas por upsert
+- [x] Hora da última observação disponível e da última ingestão registradas em `audit.pipeline_runs.metadata` da execução do job
+- [x] Cada job roda uma vez (para cron / Agendador de Tarefas) ou fica agendado com `--schedule`
+
+> **Mudanças na ingestão que esta etapa exigiu**:
+> - Uma origem só conta como "inalterada" em relação à última carga que terminou em **SUCCESS**. Antes, o hash de uma carga que falhou no meio já valia: a tentativa seguinte via "nada mudou" e o dado nunca chegava a `core`; e repetir uma carga reprovada por qualidade virava um SUCCESS vazio.
+> - Efeito colateral: enquanto uma origem continuar reprovada, cada execução grava de novo as linhas dela em `raw` (em quarentena). `raw` cresce até a origem ser corrigida.
+> - `IngestionPipeline.run(force=True)` reprocessa origens mesmo sem mudança de hash; é o que o reprocessamento de período usa.
+>
+> **Decisões que valem revisão**:
+> - Os horários `AFTER_CLOSE_TIME=19:00` e `BEFORE_OPEN_TIME=08:00` são padrões meus, não vieram do documento.
+> - O corte do job vale também para o dataset: o job diário de segunda 00:00 gera uma versão com corte no domingo (features de mercado repetindo o fechamento de sexta).
+> - Só erro inesperado é repetido. Ciclo reprovado por qualidade dos dados ou bloqueado por outro job termina na primeira tentativa.
+> - Se a ingestão é reprovada, o dataset não é reconstruído naquele ciclo.
+> - Os jobs não chamam o modelo: registrar previsões continua sendo iniciativa do componente de rede neural (`src/model_contract.py`).
+> - A janela de `reprocess_period` só existe no modo simulado; no modo real o job falha com erro explícito em vez de fazer uma coleta completa.
+> - O agendador embutido (`--schedule`) é um laço simples em um processo; não há serviço do sistema nem dependência nova.
 
 ## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (18 de 20 obrigatórios prontos)
 
@@ -149,6 +166,8 @@ Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency
 - [x] `test_transformations.py` — janelas, preenchimento, calendário e separação temporal
 - [x] `test_dataset_versioning.py` — versionamento de features (18), recuperação da última versão válida após falha (20)
 - [x] `test_model_contract.py` — registro da previsão por horizonte (19), metadados e consulta padrão do contrato
+- [x] `test_jobs.py` — horários, dia de corte, novas tentativas, agendamento e linha de comando dos jobs
+- [x] `test_pipeline.py` — orquestrador: etapas, frescor, falhas e lock
 - [ ] `docs/runbook.md` — operação, recuperação e reprocessamento
 
 > Os testes da etapa 4 exigem um PostgreSQL acessível (`.env` com `DB_*`). Eles usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga todo o rastro antes e depois de cada teste, então é seguro rodar contra um banco que já contenha cargas reais.
@@ -157,7 +176,7 @@ Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency
 
 ## Observações operacionais
 
-1. **Ordem recomendada**: seguir a sequência do documento (7 → 8). Dos testes obrigatórios faltam só o 12 e o 13, que dependem de `src/pruning.py` — a poda não aparece em nenhuma etapa numerada, então precisa ser encaixada antes de fechar a 8. `docs/runbook.md` já pode ser escrito.
+1. **O que falta para fechar**: `src/pruning.py` com os testes obrigatórios 12 e 13 (a poda não aparece em nenhuma etapa numerada) e `docs/runbook.md`.
 2. **Submódulo `base/`**: o clone ainda não traz a pasta `base/` (gitlink sem `.gitmodules`). Quem clonar precisa clonar `hugocesarleal/base` manualmente para dentro dela, ou adicionarmos o `.gitmodules` + `--recurse-submodules`.
 3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
 4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.

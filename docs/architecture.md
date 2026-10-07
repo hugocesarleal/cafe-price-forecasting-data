@@ -62,7 +62,7 @@ O pipeline implementa o seguinte ciclo de vida estritamente orquestrado:
 2. **Verificar Concorrência:** Adquire PostgreSQL Advisory Lock (`pg_try_advisory_lock`) para impedir execuções simultâneas conflitantes.
 3. **Baixar dados do Agro.br e fontes:** Obtém cotações de mercado e dados climáticos via adaptador configurável.
 4. **Registrar metadados:** Salva fonte, URL, arquivo, hash e timestamp em `raw.ingestion_files`.
-5. **Verificar se a fonte mudou:** Compara hash da carga anterior com a atual.
+5. **Verificar se a fonte mudou:** Compara o hash da coleta atual com o da última carga que terminou em `SUCCESS`.
 6. **Salvar dados brutos em `raw`:** Insere observações em `raw.market_observations` e `raw.weather_observations`.
 7. **Validar colunas, tipos, datas e valores:** Validador em Python inspeciona esquema e limites plausíveis.
 8. **Carregar `staging`:** Carga controlada nas tabelas transitórias de staging.

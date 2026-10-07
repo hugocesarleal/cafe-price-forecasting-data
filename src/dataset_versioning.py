@@ -357,11 +357,12 @@ def register_run_finish(
     status: str,
     records_features: int = 0,
     error: Optional[str] = None,
+    records_ingested: int = 0,
 ) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "CALL audit.sp_register_pipeline_finish(%s, %s, 0, %s, %s)",
-            (run_id, status, records_features, error),
+            "CALL audit.sp_register_pipeline_finish(%s, %s, %s, %s, %s)",
+            (run_id, status, records_ingested, records_features, error),
         )
     conn.commit()
 

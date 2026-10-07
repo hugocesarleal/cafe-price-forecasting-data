@@ -79,13 +79,19 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── feature_builder.py       # core → candidatas → filtro KEEP + alvos y_7d…y_90d
 │   ├── dataset_versioning.py    # Versões imutáveis do dataset, com checksum
 │   ├── model_contract.py        # Contrato com o modelo: consumo e registro de previsões
+│   ├── pipeline.py              # Orquestrador: ingestão → features → versão
 │   │
 │   │   — Em implementação —
-│   ├── pruning.py               # Janela histórica e poda lógica (máx. 2 anos)
-│   └── pipeline.py              # Orquestrador completo (15 passos)
+│   └── pruning.py               # Janela histórica e poda lógica (máx. 2 anos)
 │
 ├── tests/                       # Suite pytest (20 casos obrigatórios)
-├── jobs/                        # Jobs agendados (daily, after_close, before_open)
+├── jobs/                        # Jobs agendáveis e manuais
+│   ├── runner.py                # Novas tentativas, agendamento e linha de comando
+│   ├── update_daily.py          # 00:00 — fecha o dia anterior
+│   ├── update_after_close.py    # Pós-fechamento — fecha o próprio dia
+│   ├── update_before_open.py    # Pré-abertura — revisa o dia anterior
+│   ├── run_on_demand.py         # Execução sob demanda
+│   └── reprocess_period.py      # Reprocessamento manual de um período
 ├── docs/                        # Arquitetura, dicionário de dados, contrato ML
 │
 ├── .env.example                 # Template de variáveis de ambiente
@@ -122,6 +128,10 @@ Parâmetros críticos do `.env`:
 | `DB_HOST` | `127.0.0.1` | Host do PostgreSQL |
 | `DB_PORT` | `5433` | Porta |
 | `DB_NAME` | `cafe_previsao` | Nome do banco |
+| `UPDATE_TIME` | `00:00` | Horário do job diário (fuso `TIMEZONE`) |
+| `AFTER_CLOSE_TIME` | `19:00` | Horário do job de pós-fechamento |
+| `BEFORE_OPEN_TIME` | `08:00` | Horário do job de pré-abertura |
+| `JOB_MAX_RETRIES` | `2` | Novas tentativas de um job após erro inesperado |
 | `HISTORICAL_YEARS` | `9` | Janela histórica em anos |
 | `MAX_PRUNE_YEARS` | `2` | Teto de poda lógica |
 | `AGROBR_MODE` | `simulated` | `real` ou `simulated` |
@@ -155,7 +165,9 @@ Comportamentos que valem atenção:
 
 | Situação | Resultado |
 |---|---|
-| Hash da origem não mudou | Nada é republicado; execução termina `SUCCESS` com 0 registros |
+| Hash da origem não mudou desde a última carga bem sucedida | Nada é republicado; execução termina `SUCCESS` com 0 registros |
+| Carga anterior falhou depois de registrar a origem | A origem é processada de novo, mesmo com hash igual |
+| `force=True` | Origens inalteradas são reprocessadas; `raw` acumula, `core` não duplica |
 | Linha inválida (tipo, nulo, fora do limite) | Vai para `raw` com `validation_status='INVALID'` e não chega a `staging` |
 | Checagem **CRÍTICA** reprovada | Publicação interrompida, `core` permanece intacto, execução `FAILED` |
 | Checagem de **ALERTA** reprovada | Registrada em `audit.data_quality_checks`, mas não bloqueia |
@@ -222,13 +234,48 @@ python -m src.model_contract
 
 Lê a última versão válida, gera previsões fictícias para os horizontes configurados e as registra em `predictions.forecasts`. Não é o modelo: é um consumidor de exemplo que exercita o contrato de ponta a ponta.
 
-### 9. Executar os testes
+### 9. Agendar e operar os jobs
+
+Cada job executa o ciclo completo — ingestão, features e versão do dataset — numa execução auditada, com um único lock para o ciclo inteiro.
+
+| Job | Quando | Dia que fecha |
+|---|---|---|
+| `python -m jobs.update_daily` | `UPDATE_TIME` (00:00) | o dia anterior |
+| `python -m jobs.update_after_close` | `AFTER_CLOSE_TIME` | o próprio dia |
+| `python -m jobs.update_before_open` | `BEFORE_OPEN_TIME` | o dia anterior (revisão) |
+| `python -m jobs.run_on_demand [--cutoff AAAA-MM-DD] [--force]` | manual | o último dia com preço, ou o informado |
+| `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD` | manual | recoleta a janela e reconstrói o dataset |
+
+Sem opções, um job roda uma vez e termina — é a forma de usar com cron ou com o Agendador de Tarefas do Windows. Com `--schedule` ele fica em execução e dispara todos os dias no horário configurado, no fuso `TIMEZONE`:
+
+```bash
+python -m jobs.update_daily --schedule
+```
+
+O código de saída é `0` (SUCCESS), `1` (FAILED) ou `2` (BLOCKED: outro job está rodando).
+
+Rodar jobs em sequência não duplica nada: origem inalterada não é republicada, conteúdo idêntico reaproveita a versão do dataset e previsões são gravadas por upsert. Um erro inesperado (banco fora do ar, falha de coleta) faz o job repetir o ciclo até `JOB_MAX_RETRIES` vezes, esperando `JOB_RETRY_WAIT_SECONDS` entre elas; um ciclo reprovado por qualidade dos dados não é repetido.
+
+Cada execução de job fica em `audit.pipeline_runs` com, em `metadata`, os `run_id` das etapas, a versão produzida, a data da última observação disponível e a hora da última ingestão:
+
+```sql
+SELECT job_name, status, started_at,
+       metadata->>'version_tag'                     AS versao,
+       metadata->>'ultima_observacao_preco_arabica' AS ultima_observacao,
+       metadata->>'ultima_ingestao_em'              AS ultima_ingestao
+FROM audit.pipeline_runs
+WHERE job_name LIKE 'update_%'
+ORDER BY started_at DESC
+LIMIT 10;
+```
+
+### 10. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py`, `test_jobs.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
 
 ---
 
@@ -301,13 +348,15 @@ python -m pytest tests/ -v --tb=short
 | `test_schema.py` | 3 | Schemas, tabelas obrigatórias e seed do catálogo |
 | `test_sqlite_migration.py` | 8 | Migração legado, paridade de contagem, spot-check de valor, idempotência |
 | `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
-| `test_ingestion.py` | 16 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10) e lock concorrente (11) |
+| `test_ingestion.py` | 19 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10), lock concorrente (11), retomada após falha no meio da carga e `force` |
 | `test_idempotency.py` | 9 | Carga repetida não duplica (3), deduplicação dentro e entre origens (4), upsert sem duplicar datas e com `COALESCE` (5) |
 | `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
 | `test_no_future_leakage.py` | 9 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
 | `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
 | `test_dataset_versioning.py` | 20 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20) |
 | `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
+| `test_pipeline.py` | 8 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado e lock |
+| `test_jobs.py` | 33 | Horários e fuso, dia de corte de cada job, novas tentativas, agendador, códigos de saída e argumentos |
 | `test_pruning.py` | — | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw (12, 13) |
 
 Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 18 deles já estão implementados.

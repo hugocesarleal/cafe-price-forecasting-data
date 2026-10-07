@@ -349,3 +349,67 @@ def test_lock_e_liberado_ao_final_e_nova_execucao_prosseguir(ingest_conn, execut
     )
     assert liberada["status"] == "SUCCESS"
     assert liberada["core_market_dates"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Retry seguro e reprocessamento
+# ---------------------------------------------------------------------------
+
+def test_carga_que_falhou_no_meio_e_reprocessada_na_tentativa_seguinte(
+    ingest_conn, executar_pipeline, monkeypatch
+):
+    """A origem só conta como "já carregada" se a carga anterior terminou bem."""
+    original = IngestionPipeline._insert_staging
+
+    def falhar(self, *args, **kwargs):
+        raise RuntimeError("queda no meio da carga")
+
+    monkeypatch.setattr(IngestionPipeline, "_insert_staging", falhar)
+    with pytest.raises(RuntimeError, match="queda no meio"):
+        executar_pipeline()
+    assert contar_do_teste(ingest_conn, "raw.ingestion_files") == 1
+    assert contar_do_teste(ingest_conn, "core.market_daily") == 0
+
+    monkeypatch.setattr(IngestionPipeline, "_insert_staging", original)
+    retomada = executar_pipeline()  # mesmo conteúdo, mesmo hash
+
+    assert retomada["status"] == "SUCCESS"
+    assert retomada["arquivos_alterados"] == 1,         "Hash igual ao de uma carga que falhou não pode ser tratado como inalterado"
+    assert retomada["core_market_dates"] == 5
+    # Depois de publicada, a mesma origem volta a ser ignorada.
+    assert executar_pipeline()["arquivos_alterados"] == 0
+
+
+def test_carga_reprovada_continua_reprovada_ao_repetir(ingest_conn, executar_pipeline):
+    """Repetir uma carga com falha crítica não pode virar um SUCCESS vazio."""
+    mercado = [linha_mercado(d, "preco_arabica", None, "R$/sc 60kg") for d in datas(5)]
+    arquivos = [arquivo_stub(market_rows=mercado, weather_rows=[])]
+
+    primeira = executar_pipeline(StubAgrobrClient(arquivos))
+    segunda = executar_pipeline(StubAgrobrClient(arquivos))
+
+    assert primeira["status"] == segunda["status"] == "FAILED"
+    assert contar_do_teste(ingest_conn, "core.market_daily") == 0
+
+
+def test_force_reprocessa_origem_inalterada_sem_duplicar_core(ingest_conn, executar_pipeline):
+    executar_pipeline()
+    forcada = executar_pipeline(force=True)
+
+    assert forcada["status"] == "SUCCESS"
+    assert forcada["forcado"] is True
+    assert forcada["arquivos_alterados"] == 1
+    assert forcada["core_market_dates"] == 5
+    # raw acumula a nova coleta; core continua com uma linha por data.
+    assert contar_do_teste(ingest_conn, "raw.market_observations") == 10
+    assert contar(
+        ingest_conn,
+        "SELECT count(*) AS n FROM core.market_daily WHERE data_ref = ANY(%s)",
+        (datas(5),),
+    ) == 5
+    with ingest_conn.cursor() as cur:
+        cur.execute(
+            "SELECT has_changed FROM raw.ingestion_files WHERE pipeline_run_id = %s",
+            (forcada["run_id"],),
+        )
+        assert cur.fetchone()["has_changed"] is False,             "O registro da coleta continua dizendo a verdade: o conteúdo não mudou"
