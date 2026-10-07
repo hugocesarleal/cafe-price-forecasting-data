@@ -70,8 +70,9 @@ ORDER BY mf.data_ref ASC;
 - `dataset_version_id` (UUID): Identificador único da versão imutável.
 - `version_tag` (VARCHAR): Ex. `'v1.0.0-20261003'`.
 - `cutoff_date` (DATE): Data limite dos dados disponíveis na versão ($t$).
-- `start_date` (DATE): Data inicial da janela após verificação e controle de poda.
+- `start_date` (DATE): Data inicial da janela com que a versão foi criada.
 - `row_count` (INTEGER): Quantidade de linhas na grade diária contínua.
+- `active_start_date` / `active_row_count`: início e tamanho da janela que a consulta padrão entrega de fato, descontada a poda lógica (`is_pruned`).
 - `sha256_checksum` (CHAR(64)): Hash dos dados para garantir reprodutibilidade matemática.
 - `columns`: nome e tipo de cada coluna entregue; `feature_columns` e `target_columns` separam entradas e alvos.
 - `horizons`: horizontes de previsão configurados.

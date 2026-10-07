@@ -34,6 +34,7 @@ from src.dataset_versioning import (
 from src.db import get_connection
 from src.feature_builder import CONTROL_COLUMNS, target_column
 from src.logging_config import logger
+from src.pruning import pruning_status
 
 JOB_NAME = "previsao_simulada"
 MOCK_MODEL_VERSION = "mock_linear_baseline_v0.1"
@@ -94,12 +95,16 @@ def get_latest_dataset(conn: psycopg.Connection) -> Optional[Dict[str, Any]]:
     tipos = _describe_columns(conn)
     alvos = [target_column(h) for h in settings.horizons_list if target_column(h) in tipos]
     features = [c for c in tipos if c != "data_ref" and not c.startswith("y_")]
+    poda = pruning_status(conn, versao.dataset_version_id)
     return {
         "dataset_version_id": versao.dataset_version_id,
         "version_tag": versao.version_tag,
         "cutoff_date": versao.cutoff_date,
         "start_date": versao.start_date,
         "row_count": versao.row_count,
+        # Janela que load_features entrega de fato, descontada a poda lógica.
+        "active_start_date": poda["inicio_ativo"],
+        "active_row_count": poda["linhas_ativas"],
         "feature_count": versao.feature_count,
         "sha256_checksum": versao.sha256_checksum,
         "created_at": versao.created_at,

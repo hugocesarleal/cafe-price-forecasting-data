@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As etapas **1–7 estão concluídas**; a etapa **8 está em andamento** — o que resta é a poda da janela histórica com seus testes e o runbook (banco, ingestão, features, versionamento, contrato com o modelo e jobs já estão prontos).
+O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**. O que falta para o aceite é rodar a suíte completa contra um PostgreSQL — ver o estado da verificação na etapa 8 e a tabela de critérios de aceite ao final.
 
 ---
 
@@ -24,7 +24,7 @@ O documento define **8 etapas de entrega**. As etapas **1–7 estão concluídas
   - `predictions.forecasts`
   - `audit.pipeline_runs`, `audit.data_quality_checks`, `audit.model_runs`, `audit.pending_events`
 - [x] Índices (`migrations/003`), funções (`004`), triggers (`005`)
-- [x] Catálogo de variáveis semeado (`006`): 22 KEEP, 2 TARGET, 49 DROP, 4 INTERNAL_INPUT
+- [x] Catálogo de variáveis semeado (`006`): 19 KEEP, 1 TARGET, 47 DROP, 3 INTERNAL_INPUT
 - [x] Parâmetros obrigatórios em `src/config.py`: `HISTORICAL_YEARS=9`, `MAX_PRUNE_YEARS=2`, `DATASET_MIN_DAYS=1096`, `FORECAST_HORIZONS=7,15,30,90`, `TIMEZONE=America/Sao_Paulo`, `UPDATE_TIME=00:00`
 - [x] Flag `CONFIRM_HISTORICAL_WINDOW` para a inconsistência 9 anos vs. ~1.096 dias exigida pelo documento
 
@@ -153,34 +153,66 @@ O documento define **8 etapas de entrega**. As etapas **1–7 estão concluídas
 > - A janela de `reprocess_period` só existe no modo simulado; no modo real o job falha com erro explícito em vez de fazer uma coleta completa.
 > - O agendador embutido (`--schedule`) é um laço simples em um processo; não há serviço do sistema nem dependência nova.
 
-## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (18 de 20 obrigatórios prontos)
+## Etapa 8 — Testes e README ✅ CONCLUÍDA (20 de 20 obrigatórios implementados)
 
-Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency.py` (3, 4, 5), `test_validation.py` (6, 7, 8 + as 12 checagens), `test_ingestion.py` (9, 10, 11), `test_feature_catalog.py` (14, 15, 17), `test_no_future_leakage.py` (16), `test_dataset_versioning.py` (18, 20), `test_model_contract.py` (19). Faltam 2:
-
+- [x] `test_schema.py` (1), `test_sqlite_migration.py` (2)
 - [x] `test_idempotency.py` — carga idempotente (3), deduplicação (4), upsert (5)
 - [x] `test_validation.py` — arquivo com coluna ausente (6), arquivo com tipo inválido (7), valor fora do limite (8)
 - [x] `test_ingestion.py` — falha de conexão (9), retry (10), bloqueio de execução concorrente (11)
-- [ ] `test_pruning.py` — poda limitada a 2 anos (12), preservação de dados brutos (13)
+- [x] `test_pruning.py` — poda limitada a 2 anos (12), preservação de dados brutos (13)
 - [x] `test_feature_catalog.py` — seleção somente KEEP/TARGET (14), exclusão de DROP/KEEP_WITH_CAVEAT/TEST_ONLY da tabela final (15), geração dos alvos de 7/15/30/90 dias (17)
 - [x] `test_no_future_leakage.py` — ausência de vazamento temporal (16)
-- [x] `test_transformations.py` — janelas, preenchimento, calendário e separação temporal
 - [x] `test_dataset_versioning.py` — versionamento de features (18), recuperação da última versão válida após falha (20)
-- [x] `test_model_contract.py` — registro da previsão por horizonte (19), metadados e consulta padrão do contrato
-- [x] `test_jobs.py` — horários, dia de corte, novas tentativas, agendamento e linha de comando dos jobs
-- [x] `test_pipeline.py` — orquestrador: etapas, frescor, falhas e lock
-- [ ] `docs/runbook.md` — operação, recuperação e reprocessamento
+- [x] `test_model_contract.py` — registro da previsão por horizonte (19)
+- [x] Além dos obrigatórios: `test_transformations.py`, `test_jobs.py`, `test_pipeline.py`
+- [x] **`src/pruning.py`** — poda lógica por versão (`is_pruned`), teto de 2 anos cumulativo, mínimo de segurança `DATASET_MIN_DAYS`, trava `CONFIRM_HISTORICAL_WINDOW`, reversível (`--restore`)
+- [x] `docs/runbook.md` — operação, recuperação e reprocessamento
+- [x] README com configuração, execução de cada etapa, jobs, poda e testes
 
-> Os testes da etapa 4 exigem um PostgreSQL acessível (`.env` com `DB_*`). Eles usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga todo o rastro antes e depois de cada teste, então é seguro rodar contra um banco que já contenha cargas reais.
+> **Estado da verificação**: os testes que rodam em memória passam. Os que exigem PostgreSQL — toda a suíte de ingestão, idempotência, schema e migração, e a parte de banco de features, versionamento, contrato, orquestrador e poda — **não foram executados** no ambiente em que as etapas 5 a 8 foram escritas, que não tinha PostgreSQL. Rodar `python -m pytest tests/ -v` contra um banco é o que falta para considerar o MVP aceito.
+>
+> Os testes 9 a 11 e a suíte anterior foram escritos na etapa 4; a mudança da etapa 7 na detecção de origem inalterada os afeta e também precisa dessa rodada.
 
----
+> **Decisões da poda que valem revisão**:
+> - A poda vale para uma versão; versões novas nascem com a janela inteira.
+> - O mínimo `DATASET_MIN_DAYS` como condição para podar é interpretação minha de "mínimo de segurança": com a base legada de ~1.096 dias, qualquer poda é recusada.
+> - `CONFIRM_HISTORICAL_WINDOW` trava a poda, não o pipeline inteiro. O documento fala em recusar a execução "em produção", mas não há hoje uma configuração que diga qual ambiente é produção, e o padrão da flag em `src/config.py` é `true`.
 
 ## Observações operacionais
 
-1. **O que falta para fechar**: `src/pruning.py` com os testes obrigatórios 12 e 13 (a poda não aparece em nenhuma etapa numerada) e `docs/runbook.md`.
+1. **O que falta para fechar**: executar `python -m pytest tests/ -v` com PostgreSQL disponível e resolver o que aparecer.
 2. **Submódulo `base/`**: o clone ainda não traz a pasta `base/` (gitlink sem `.gitmodules`). Quem clonar precisa clonar `hugocesarleal/base` manualmente para dentro dela, ou adicionarmos o `.gitmodules` + `--recurse-submodules`.
 3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
 4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.
 
-## Critérios de aceite do documento (resumo)
+## Critérios de aceite do documento
 
-Concluído somente quando: PostgreSQL subir localmente; migrations criarem tudo; SQLite migrar para base de teste; pipeline baixar ou simular Agro.br; mesma carga rodar 2× sem duplicidade; variáveis geradas com nomes/tipos documentados; excluídas fora da consulta padrão; brutos rastreáveis; falha não destruir última versão válida; poda ≤ 2 anos; 4 horizontes parametrizados; testes de vazamento temporal passando; triggers/procedures nos limites definidos; logs/status/hash/versão/contagens registrados; README completo; contrato com o modelo documentado; nenhum widget/tela/modelo neste escopo.
+Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementado, verificação depende de PostgreSQL · ❌ não atendido.
+
+| Critério | Estado | Onde |
+|---|---|---|
+| PostgreSQL sobe localmente | 🟡 | `docker-compose.yml` |
+| Migrations criam tudo | 🟡 | `src/migrator.py`, `test_schema.py` |
+| SQLite migra para base de teste | 🟡 | `src/sqlite_migrator.py`, `test_sqlite_migration.py` |
+| Pipeline baixa ou simula Agro.br | 🟡 | simula; o modo real não existe (`RealAgrobrClient` falha de propósito) |
+| Mesma carga roda 2× sem duplicidade | 🟡 | `test_idempotency.py`; ressalva: `src.sqlite_migrator` duplica `raw` se rodar 2× |
+| Variáveis geradas com nomes/tipos documentados | ✅ | `docs/data_dictionary.md`, `test_feature_catalog.py` |
+| Excluídas fora da consulta padrão | ✅ | `test_feature_catalog.py` (15) |
+| Brutos rastreáveis | 🟡 | `raw.*` com `file_id`, `pipeline_run_id`, hash |
+| Falha não destrói a última versão válida | 🟡 | `test_dataset_versioning.py` (20) |
+| Poda ≤ 2 anos | ✅ | `test_pruning.py` (12) |
+| 4 horizontes parametrizados | ✅ | `FORECAST_HORIZONS`, `test_feature_catalog.py` (17) |
+| Testes de vazamento temporal passando | ✅ | `test_no_future_leakage.py` (16) |
+| Triggers/procedures nos limites definidos | 🟡 | `sql/triggers.sql`, `sql/functions.sql`: só `updated_at`, eventos e upsert |
+| Logs/status/hash/versão/contagens registrados | 🟡 | `audit.pipeline_runs`, `raw.ingestion_files`, `features.dataset_versions` |
+| README completo | ✅ | `README.md`, `docs/runbook.md` |
+| Contrato com o modelo documentado | ✅ | `docs/model_contract.md`, `src/model_contract.py` |
+| Nenhum widget/tela/modelo neste escopo | ✅ | só o consumidor simulado, que não é modelo |
+
+### Pendências fora das etapas
+
+- **Modo real de coleta**: depende de URLs, credenciais e exemplos de resposta de cada fonte.
+- **Janela histórica**: 9 anos contra ~1.096 dias; decisão da equipe.
+- **Submódulo `base/`**: gitlink sem `.gitmodules`.
+- **Imutabilidade das versões no banco**: hoje garantida pelo código e conferível por checksum, sem trigger.
+- **Liberação do lock na ingestão após erro SQL**: a liberação roda antes do rollback; visto na leitura do código, não reproduzido.

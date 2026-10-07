@@ -80,9 +80,7 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── dataset_versioning.py    # Versões imutáveis do dataset, com checksum
 │   ├── model_contract.py        # Contrato com o modelo: consumo e registro de previsões
 │   ├── pipeline.py              # Orquestrador: ingestão → features → versão
-│   │
-│   │   — Em implementação —
-│   └── pruning.py               # Janela histórica e poda lógica (máx. 2 anos)
+│   └── pruning.py               # Poda lógica da janela histórica (máx. 2 anos)
 │
 ├── tests/                       # Suite pytest (20 casos obrigatórios)
 ├── jobs/                        # Jobs agendáveis e manuais
@@ -92,7 +90,7 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── update_before_open.py    # Pré-abertura — revisa o dia anterior
 │   ├── run_on_demand.py         # Execução sob demanda
 │   └── reprocess_period.py      # Reprocessamento manual de um período
-├── docs/                        # Arquitetura, dicionário de dados, contrato ML
+├── docs/                        # Arquitetura, dicionário de dados, contrato ML, runbook
 │
 ├── .env.example                 # Template de variáveis de ambiente
 ├── requirements.txt             # Dependências Python
@@ -126,7 +124,7 @@ Parâmetros críticos do `.env`:
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `DB_HOST` | `127.0.0.1` | Host do PostgreSQL |
-| `DB_PORT` | `5433` | Porta |
+| `DB_PORT` | `5433` | Porta (o `.env.example` e o `docker-compose.yml` usam `5432`) |
 | `DB_NAME` | `cafe_previsao` | Nome do banco |
 | `UPDATE_TIME` | `00:00` | Horário do job diário (fuso `TIMEZONE`) |
 | `AFTER_CLOSE_TIME` | `19:00` | Horário do job de pós-fechamento |
@@ -140,7 +138,7 @@ Parâmetros críticos do `.env`:
 ### 3. Criar o banco e aplicar migrations
 
 ```bash
-# Criar banco (se ainda não existir)
+# Criar banco (se ainda não existir); use a porta do seu DB_PORT
 createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
 
 # Aplicar todas as migrations
@@ -269,7 +267,17 @@ ORDER BY started_at DESC
 LIMIT 10;
 ```
 
-### 10. Executar os testes
+### 10. Podar a janela histórica
+
+```bash
+python -m src.pruning --days 365          # descarta o primeiro ano da última versão válida
+python -m src.pruning --start 2019-01-01  # primeiro dia que continua ativo
+python -m src.pruning --restore           # desfaz a poda
+```
+
+A poda é lógica: marca `is_pruned = TRUE` nas linhas mais antigas de `features.model_features` e o consumidor deixa de recebê-las. Nada é apagado, e `raw` e `core` não são tocados. É recusada, sem alterar nada, se descartar mais de `MAX_PRUNE_YEARS` (730 dias, contando o que já foi podado na versão), se deixar menos de `DATASET_MIN_DAYS` dias ativos, ou sem `CONFIRM_HISTORICAL_WINDOW=true`.
+
+### 11. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
@@ -332,7 +340,7 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 | **Imutabilidade do raw** | `raw.market_observations` e `raw.weather_observations` nunca têm linhas deletadas |
 | **Idempotência** | Upsert com `ON CONFLICT … DO UPDATE SET col = COALESCE(excluded.col, atual)` |
 | **Sem concorrência** | `pg_try_advisory_lock` impede duas instâncias simultâneas |
-| **Teto de poda** | Máximo 2 anos removidos da janela ativa; poda é lógica (`is_pruned = TRUE`), nunca física |
+| **Teto de poda** | Máximo 2 anos removidos da janela ativa, mesmo em podas sucessivas; poda é lógica (`is_pruned = TRUE`), reversível e nunca física |
 | **Rastreabilidade** | Toda linha carregada carrega `pipeline_run_id` e `load_version` |
 
 ---
@@ -357,9 +365,9 @@ python -m pytest tests/ -v --tb=short
 | `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
 | `test_pipeline.py` | 8 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado e lock |
 | `test_jobs.py` | 33 | Horários e fuso, dia de corte de cada job, novas tentativas, agendador, códigos de saída e argumentos |
-| `test_pruning.py` | — | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw (12, 13) |
+| `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
 
-Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 18 deles já estão implementados.
+Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; os 20 estão implementados.
 
 ---
 
@@ -397,3 +405,5 @@ Ver [`docs/model_contract.md`](docs/model_contract.md) para o contrato completo.
 | [`docs/architecture.md`](docs/architecture.md) | Fluxo dos 6 schemas, pipeline de 15 passos, locks e janela histórica |
 | [`docs/data_dictionary.md`](docs/data_dictionary.md) | Catálogo completo de variáveis (KEEP, TARGET, DROP) e modelagem das tabelas |
 | [`docs/model_contract.md`](docs/model_contract.md) | Contrato formal de integração com o time de ML, consulta SQL padrão e mock consumer |
+| [`docs/runbook.md`](docs/runbook.md) | Operação diária, verificação de saúde, recuperação de falhas, reprocessamento e poda |
+| [`docs/TODO.md`](docs/TODO.md) | Estado de cada etapa, decisões em aberto e critérios de aceite |
