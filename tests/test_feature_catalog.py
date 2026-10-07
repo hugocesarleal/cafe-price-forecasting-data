@@ -18,13 +18,9 @@ from conftest import (
     DATA_BASE,
     KEEP_ESPERADAS,
     StubAgrobrClient,
-    arquivo_stub,
+    arquivos_do_core_sintetico,
     core_sintetico,
-    hash_stub,
-    linha_clima,
-    linha_mercado,
 )
-from src.agrobr_client import UNITS
 from src.feature_builder import (
     WARMUP_DAYS,
     assemble_matrix,
@@ -191,25 +187,6 @@ def test_tabela_final_so_tem_colunas_keep_ou_alvo(db_conn):
         )
         nao_liberadas = {r["variable_name"] for r in cur.fetchall()}
     assert not colunas & nao_liberadas
-
-
-def arquivos_do_core_sintetico(dias):
-    """O core sintético no formato de coleta, para passar pela ingestão real."""
-    mercado, clima = core_sintetico(dias)
-    linhas_mercado = [
-        linha_mercado(data.date(), variavel, float(valor), UNITS[variavel])
-        for variavel in mercado.columns
-        for data, valor in mercado[variavel].items()
-    ]
-    variaveis_clima = [c for c in clima.columns if c not in ("data_ref", "region")]
-    linhas_clima = [
-        linha_clima(linha.data_ref.date(), linha.region, variavel,
-                    float(getattr(linha, variavel)), UNITS[variavel])
-        for linha in clima.itertuples(index=False)
-        for variavel in variaveis_clima
-    ]
-    return [arquivo_stub(content_hash=hash_stub("core-sintetico"),
-                         market_rows=linhas_mercado, weather_rows=linhas_clima)]
 
 
 def test_features_construidas_de_core_sao_publicadas_sem_duplicar(

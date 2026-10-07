@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As etapas **1–5 estão concluídas**; as etapas **6–8 estão pendentes** — o que resta é o versionamento do dataset, o agendamento dos jobs e os testes que dependem deles (a fundação de banco, o pipeline de ingestão e a camada de features já estão prontos).
+O documento define **8 etapas de entrega**. As etapas **1–6 estão concluídas**; as etapas **7–8 estão pendentes** — o que resta é o agendamento dos jobs, a poda da janela histórica com seus testes e o runbook (banco, ingestão, features, versionamento e contrato com o modelo já estão prontos).
 
 ---
 
@@ -71,7 +71,7 @@ O documento define **8 etapas de entrega**. As etapas **1–5 estão concluídas
   - [x] abertura e fechamento de uma carga — `audit.sp_register_pipeline_start`, `audit.sp_register_pipeline_finish`
   - [x] registro de eventos — `audit.fn_emit_event`
   - [ ] deduplicação como procedure — hoje é feita em Python (`validation.deduplicate`) antes do `staging`, o que mantém a regra testável; migrar para SQL só se houver outro consumidor
-  - [ ] atualização de estatísticas — depende da etapa 6 (versionamento)
+  - [ ] atualização de estatísticas — sem definição no documento além do nome; a contagem de features por execução já fica em `audit.pipeline_runs.records_features`
 
 > **Armadilha conhecida**: `raw.ingestion_files.file_hash` é `CHAR(64)`. O PostgreSQL completa valores mais curtos com espaços, então qualquer comparação de hash precisa de `.strip()` — sem isso toda coleta pareceria "alterada" e o pipeline republicaria tudo, sempre. Já tratado em `src/ingestion.py`.
 
@@ -101,18 +101,29 @@ O documento define **8 etapas de entrega**. As etapas **1–5 estão concluídas
 > - `PUBLICATION_LAG_DAYS` está vazio (tudo disponível no fechamento do próprio dia). `core` não guarda data de publicação, então o atraso real de cada fonte (NASA POWER, por exemplo) precisa ser informado quando o modo real existir.
 > - `publish_features` exige uma versão já criada em `features.dataset_versions` e não faz commit: a criação da versão é a etapa 6.
 
-## Etapa 6 — Versionamento e auditoria ❌ PENDENTE
+## Etapa 6 — Versionamento e auditoria ✅ CONCLUÍDA
 
-- [ ] **`src/dataset_versioning.py`**:
-  - [ ] criar versão imutável do dataset de features em `features.dataset_versions`
-  - [ ] carga com falha crítica **não substitui** a última versão válida (mantém a anterior disponível)
-  - [ ] sinalizar que os dados estão prontos para o componente de previsão
-  - [ ] recuperação da última versão válida após falha
-- [ ] **Integração com o componente de rede neural** (implementar o que `model_contract.md` documenta):
-  - [ ] consulta/endpoint da última versão válida das features
-  - [ ] identificador da versão, colunas e tipos, data de corte, horizonte, status de qualidade
-  - [ ] função de exemplo que simula o consumo das features (sem implementar o modelo)
-  - [ ] registro das previsões recebidas em `predictions.forecasts` (por horizonte, com `model_version` e `pipeline_run_id`)
+- [x] **`src/dataset_versioning.py`**:
+  - [x] versão imutável do dataset em `features.dataset_versions`, assinada por SHA-256 do conteúdo gravado (`create_dataset_version`, `compute_checksum`)
+  - [x] conteúdo idêntico reaproveita a versão existente; conteúdo revisado para o mesmo corte gera versão nova, com o checksum na tag
+  - [x] carga com falha crítica **não substitui** a última versão válida: a versão nasce inválida, as linhas são gravadas e só então ela é validada, na mesma transação
+  - [x] checagens de qualidade da matriz registradas em `audit.data_quality_checks` (`check_matrix`)
+  - [x] sinalização de prontidão: o trigger emite `DATASET_READY` quando a versão vira válida
+  - [x] recuperação da última versão válida após falha (`get_latest_valid_version`, `invalidate_dataset_version`)
+  - [x] verificação de integridade de uma versão gravada (`verify_dataset_version`)
+  - [x] execução completa auditada, com lock: `python -m src.dataset_versioning` (`run_dataset_build`)
+- [x] **Integração com o componente de rede neural** — `src/model_contract.py`:
+  - [x] consulta da última versão válida das features (`load_features`)
+  - [x] identificador da versão, colunas e tipos, data de corte, horizontes, status de qualidade (`get_latest_dataset`)
+  - [x] função de exemplo que simula o consumo das features (`mock_neural_model_predict`, `run_mock_forecast`)
+  - [x] registro das previsões em `predictions.forecasts` por horizonte, com `model_version` e `pipeline_run_id`, sem duplicar (`register_forecasts`), e da execução em `audit.model_runs`
+
+> **Decisões que valem revisão**:
+> - A imutabilidade é garantida pelo código (nenhuma função reescreve uma versão) e conferível pelo checksum, mas **não há trigger no banco** impedindo um `UPDATE` manual em `features.model_features`.
+> - Falhas CRÍTICAS da matriz: vazia, alvo entre as features, ou alguma feature inteira nula. Linha de corte incompleta, alvo sem nenhum valor e janela menor que `DATASET_MIN_DAYS` são só alerta e aparecem no status de qualidade.
+> - `register_forecasts` rejeita o lote inteiro se uma previsão viola o contrato, e não aceita `reference_date` posterior ao corte da versão usada.
+> - No conflito `(reference_date, horizon_days, model_version)` a previsão é atualizada. Além dos três campos do contrato original, o upsert atualiza `target_date`, `pipeline_run_id` e `forecast_status`.
+> - `create_dataset_version` e `register_forecasts` não fazem commit; `run_dataset_build` e `run_mock_forecast` fazem.
 
 ## Etapa 7 — Agendamento ❌ PENDENTE
 
@@ -125,9 +136,9 @@ O documento define **8 etapas de entrega**. As etapas **1–5 estão concluídas
   - [ ] retry seguro após falha
 - [ ] Sem duplicar dados/previsões entre jobs; registrar hora da última observação disponível e da última ingestão
 
-## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (15 de 20 obrigatórios prontos)
+## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (18 de 20 obrigatórios prontos)
 
-Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency.py` (3, 4, 5), `test_validation.py` (6, 7, 8 + as 12 checagens), `test_ingestion.py` (9, 10, 11), `test_feature_catalog.py` (14, 15, 17), `test_no_future_leakage.py` (16). Faltam 5:
+Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency.py` (3, 4, 5), `test_validation.py` (6, 7, 8 + as 12 checagens), `test_ingestion.py` (9, 10, 11), `test_feature_catalog.py` (14, 15, 17), `test_no_future_leakage.py` (16), `test_dataset_versioning.py` (18, 20), `test_model_contract.py` (19). Faltam 2:
 
 - [x] `test_idempotency.py` — carga idempotente (3), deduplicação (4), upsert (5)
 - [x] `test_validation.py` — arquivo com coluna ausente (6), arquivo com tipo inválido (7), valor fora do limite (8)
@@ -136,7 +147,8 @@ Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency
 - [x] `test_feature_catalog.py` — seleção somente KEEP/TARGET (14), exclusão de DROP/KEEP_WITH_CAVEAT/TEST_ONLY da tabela final (15), geração dos alvos de 7/15/30/90 dias (17)
 - [x] `test_no_future_leakage.py` — ausência de vazamento temporal (16)
 - [x] `test_transformations.py` — janelas, preenchimento, calendário e separação temporal
-- [ ] versionamento de features (18), registro da previsão por horizonte (19), recuperação da última versão válida após falha (20) — dependem da etapa 6
+- [x] `test_dataset_versioning.py` — versionamento de features (18), recuperação da última versão válida após falha (20)
+- [x] `test_model_contract.py` — registro da previsão por horizonte (19), metadados e consulta padrão do contrato
 - [ ] `docs/runbook.md` — operação, recuperação e reprocessamento
 
 > Os testes da etapa 4 exigem um PostgreSQL acessível (`.env` com `DB_*`). Eles usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga todo o rastro antes e depois de cada teste, então é seguro rodar contra um banco que já contenha cargas reais.
@@ -145,7 +157,7 @@ Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency
 
 ## Observações operacionais
 
-1. **Ordem recomendada**: seguir a sequência do documento (6 → 7 → 8). A etapa 8 já foi adiantada nos itens que não dependem de versionamento (3 a 11 e 14 a 17); os testes 12, 13 e 18 a 20 só saem depois da etapa 6. Dá para paralelizar `docs/runbook.md` com a etapa 6, já que ingestão e features estão estáveis.
+1. **Ordem recomendada**: seguir a sequência do documento (7 → 8). Dos testes obrigatórios faltam só o 12 e o 13, que dependem de `src/pruning.py` — a poda não aparece em nenhuma etapa numerada, então precisa ser encaixada antes de fechar a 8. `docs/runbook.md` já pode ser escrito.
 2. **Submódulo `base/`**: o clone ainda não traz a pasta `base/` (gitlink sem `.gitmodules`). Quem clonar precisa clonar `hugocesarleal/base` manualmente para dentro dela, ou adicionarmos o `.gitmodules` + `--recurse-submodules`.
 3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
 4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.

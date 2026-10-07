@@ -19,7 +19,8 @@ Garantias contra vazamento temporal:
 * séries divulgadas com atraso são deslocadas por ``PUBLICATION_LAG_DAYS``;
 * o alvo de ``t`` vem sempre de um pregão posterior a ``t``.
 
-A criação da versão em ``features.dataset_versions`` não é feita aqui.
+A criação da versão em ``features.dataset_versions`` fica em
+``src/dataset_versioning.py``.
 """
 
 from __future__ import annotations
@@ -367,10 +368,53 @@ def build_feature_matrix(
 # Publicação
 # ---------------------------------------------------------------------------
 
+CONTROL_COLUMNS = frozenset({"id", "dataset_version_id", "data_ref", "is_pruned", "created_at"})
+
+
+def column_scales(conn: psycopg.Connection, matrix: Optional[FeatureMatrix] = None) -> Dict[str, int]:
+    """Casas decimais de cada coluna de dados de ``features.model_features``.
+
+    Com ``matrix``, confere antes que toda coluna dela exista na tabela.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name, numeric_scale FROM information_schema.columns "
+            "WHERE table_schema = 'features' AND table_name = 'model_features'"
+        )
+        escalas = {
+            r["column_name"]: r["numeric_scale"] for r in cur.fetchall()
+            if r["column_name"] not in CONTROL_COLUMNS
+        }
+
+    if matrix is not None:
+        sem_coluna = [c for c in matrix.feature_columns + matrix.target_columns
+                      if c not in escalas]
+        if sem_coluna:
+            raise ValueError(
+                "features.model_features não tem coluna para "
+                f"{sem_coluna}; crie uma migration antes de liberá-las no catálogo."
+            )
+    return escalas
+
+
+def storage_frame(matrix: FeatureMatrix, scales: Mapping[str, int]) -> pd.DataFrame:
+    """A matriz como será gravada: arredondada na escala de cada coluna.
+
+    É a única representação usada para gravar e para calcular o checksum da
+    versão, de modo que o que está no banco seja sempre o que foi assinado.
+    """
+    colunas = matrix.feature_columns + matrix.target_columns
+    arredondada = matrix.frame[colunas].round(
+        {c: scales[c] for c in colunas if scales.get(c) is not None})
+    # Soma zero para que -0.0 vire 0.0, como o NUMERIC do banco devolve.
+    return arredondada + 0.0
+
+
 def publish_features(
     conn: psycopg.Connection,
     dataset_version_id: str,
     matrix: FeatureMatrix,
+    scales: Optional[Mapping[str, int]] = None,
 ) -> int:
     """Grava a matriz em ``features.model_features`` sob uma versão existente.
 
@@ -379,24 +423,8 @@ def publish_features(
     chamada não duplica nada. Não faz commit: quem cria a versão decide a
     transação.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT column_name, numeric_scale FROM information_schema.columns "
-            "WHERE table_schema = 'features' AND table_name = 'model_features'"
-        )
-        escalas = {r["column_name"]: r["numeric_scale"] for r in cur.fetchall()}
-
-    colunas = matrix.feature_columns + matrix.target_columns
-    sem_coluna = [c for c in colunas if c not in escalas]
-    if sem_coluna:
-        raise ValueError(
-            "features.model_features não tem coluna para "
-            f"{sem_coluna}; crie uma migration antes de liberá-las no catálogo."
-        )
-
-    # Arredonda na escala da coluna para que o gravado seja igual ao calculado.
-    valores = matrix.frame[colunas].round(
-        {c: escalas[c] for c in colunas if escalas[c] is not None})
+    valores = storage_frame(matrix, scales or column_scales(conn, matrix))
+    colunas = list(valores.columns)
     valores = valores.astype(object).where(valores.notna(), None)
 
     insert = sql.SQL(

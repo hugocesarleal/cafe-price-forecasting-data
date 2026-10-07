@@ -56,6 +56,8 @@ def hash_stub(variante: str) -> str:
 
 
 _TABELAS_COM_RUN = (
+    "predictions.forecasts",
+    "audit.model_runs",
     "raw.market_observations",
     "raw.weather_observations",
     "staging.market_observations",
@@ -306,6 +308,16 @@ def purge_test_versions(conn) -> None:
     """Apaga as versões de dataset criadas por testes (as features vão em cascata)."""
     with conn.cursor() as cur:
         cur.execute(
+            "DELETE FROM predictions.forecasts WHERE dataset_version_id IN "
+            "(SELECT dataset_version_id FROM features.dataset_versions "
+            " WHERE version_tag LIKE %s)",
+            (TAG_VERSAO_TESTE + "%",),
+        )
+        cur.execute(
+            "DELETE FROM audit.pending_events WHERE payload->>'version_tag' LIKE %s",
+            (TAG_VERSAO_TESTE + "%",),
+        )
+        cur.execute(
             "DELETE FROM features.dataset_versions WHERE version_tag LIKE %s",
             (TAG_VERSAO_TESTE + "%",),
         )
@@ -331,6 +343,87 @@ def versao_teste(ingest_conn):
     ingest_conn.commit()
     try:
         yield version_id
+    finally:
+        with contextlib.suppress(Exception):
+            ingest_conn.rollback()
+            purge_test_versions(ingest_conn)
+
+# Casas decimais das colunas de features.model_features (sql/tables.sql), para
+# os testes que arredondam e assinam a matriz sem consultar o banco.
+ESCALAS = {
+    **{c: 3 for c in KEEP_ESPERADAS},
+    "sin_ano": 6, "cos_ano": 6,
+    "usd_brl": 4, "ice_kc": 4, "preco_robusta": 2, "b3_cafe_ajuste": 2,
+    "y_7d": 2, "y_15d": 2, "y_30d": 2, "y_90d": 2,
+}
+
+# Janela usada pelos testes que passam o core sintético pela ingestão real.
+DIAS_CORE_BANCO = 260
+
+
+def matriz_sintetica(dias: int = 400, seed: int = 42):
+    """Matriz de features montada em memória a partir do core sintético."""
+    from src.feature_builder import WARMUP_DAYS, assemble_matrix
+
+    mercado, clima = core_sintetico(dias, seed=seed)
+    return assemble_matrix(
+        mercado, clima, KEEP_ESPERADAS,
+        DATA_BASE + timedelta(days=WARMUP_DAYS), DATA_BASE + timedelta(days=dias - 1),
+        (7, 15, 30, 90),
+    )
+
+
+def arquivos_do_core_sintetico(dias: int, seed: int = 42) -> List[SourceFile]:
+    """O core sintético no formato de coleta, para passar pela ingestão real."""
+    from src.agrobr_client import UNITS
+
+    mercado, clima = core_sintetico(dias, seed=seed)
+    linhas_mercado = [
+        linha_mercado(data.date(), variavel, float(valor), UNITS[variavel])
+        for variavel in mercado.columns
+        for data, valor in mercado[variavel].items()
+    ]
+    variaveis_clima = [c for c in clima.columns if c not in ("data_ref", "region")]
+    linhas_clima = [
+        linha_clima(linha.data_ref.date(), linha.region, variavel,
+                    float(getattr(linha, variavel)), UNITS[variavel])
+        for linha in clima.itertuples(index=False)
+        for variavel in variaveis_clima
+    ]
+    return [arquivo_stub(content_hash=hash_stub(f"core-sintetico-{seed}"),
+                         market_rows=linhas_mercado, weather_rows=linhas_clima)]
+
+
+@pytest.fixture
+def core_no_banco(ingest_conn, executar_pipeline):
+    """Publica o core sintético em ``core`` e devolve a janela e o run da carga.
+
+    As versões que os testes criarem sobre ele não são confirmadas: somem no
+    rollback e nunca ficam visíveis para outro consumidor do banco. Por isso
+    ``recarregar`` — que simula uma revisão da fonte — roda a ingestão em outra
+    conexão, para que o commit dela não confirme a transação do teste.
+    """
+    from src.feature_builder import WARMUP_DAYS
+    from src.ingestion import IngestionPipeline
+
+    def recarregar(seed: int):
+        with get_connection() as outra:
+            return IngestionPipeline(
+                client=StubAgrobrClient(arquivos_do_core_sintetico(DIAS_CORE_BANCO, seed=seed)),
+                conn=outra,
+                job_name=JOB_NAME_TESTES,
+            ).run()
+
+    purge_test_versions(ingest_conn)
+    carga = executar_pipeline(StubAgrobrClient(arquivos_do_core_sintetico(DIAS_CORE_BANCO)))
+    assert carga["status"] == "SUCCESS"
+    try:
+        yield {
+            "inicio": DATA_BASE + timedelta(days=WARMUP_DAYS),
+            "corte": DATA_BASE + timedelta(days=DIAS_CORE_BANCO - 1),
+            "run_id": carga["run_id"],
+            "recarregar": recarregar,
+        }
     finally:
         with contextlib.suppress(Exception):
             ingest_conn.rollback()

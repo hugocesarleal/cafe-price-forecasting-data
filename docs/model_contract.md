@@ -22,7 +22,7 @@ O componente de dados é o único responsável pela ingestão, limpeza, engenhar
 ## 3. Acesso aos Dados Preparados (Consumo das Features)
 
 ### 3.1 Consulta Padrão da Última Versão Válida
-O componente consumidor obtém o snapshot de treino/inferência através da view ou consulta parametrizada:
+O componente consumidor obtém o snapshot de treino/inferência por `src.model_contract.load_features(conn)`, que executa a consulta abaixo:
 
 ```sql
 SELECT 
@@ -66,13 +66,16 @@ ORDER BY mf.data_ref ASC;
 ```
 
 ### 3.2 Metadados da Versão Fornecidos ao Modelo
-Ao consultar `features.dataset_versions`, o modelo tem acesso a:
+`src.model_contract.get_latest_dataset(conn)` devolve, da última versão válida:
 - `dataset_version_id` (UUID): Identificador único da versão imutável.
 - `version_tag` (VARCHAR): Ex. `'v1.0.0-20261003'`.
 - `cutoff_date` (DATE): Data limite dos dados disponíveis na versão ($t$).
 - `start_date` (DATE): Data inicial da janela após verificação e controle de poda.
 - `row_count` (INTEGER): Quantidade de linhas na grade diária contínua.
 - `sha256_checksum` (CHAR(64)): Hash dos dados para garantir reprodutibilidade matemática.
+- `columns`: nome e tipo de cada coluna entregue; `feature_columns` e `target_columns` separam entradas e alvos.
+- `horizons`: horizontes de previsão configurados.
+- `quality`: `{"status": "OK" | "WARNING", "alertas": [...]}` — checagens de alerta reprovadas na construção da versão. Falha crítica nunca aparece aqui: ela impede a versão de existir.
 
 ---
 
@@ -87,7 +90,7 @@ Ao consultar `features.dataset_versions`, o modelo tem acesso a:
 
 ## 5. Contrato de Retorno das Previsões
 
-O componente de machine learning grava as inferências geradas na tabela `predictions.forecasts`:
+O componente de machine learning entrega as inferências a `src.model_contract.register_forecasts(conn, previsoes)`, que valida o lote e grava em `predictions.forecasts`:
 
 ```sql
 INSERT INTO predictions.forecasts (
@@ -115,16 +118,30 @@ INSERT INTO predictions.forecasts (
 )
 ON CONFLICT (reference_date, horizon_days, model_version)
 DO UPDATE SET
+    target_date = EXCLUDED.target_date,
     predicted_value = EXCLUDED.predicted_value,
-    generated_at = EXCLUDED.generated_at,
-    dataset_version_id = EXCLUDED.dataset_version_id;
+    generated_at = clock_timestamp(),
+    dataset_version_id = EXCLUDED.dataset_version_id,
+    pipeline_run_id = EXCLUDED.pipeline_run_id,
+    forecast_status = EXCLUDED.forecast_status;
 ```
+
+O lote inteiro é rejeitado, sem gravar nada, se alguma previsão:
+
+- não traz `reference_date`, `target_date`, `horizon_days`, `predicted_value`, `dataset_version_id`, `model_version` ou `pipeline_run_id`;
+- usa um horizonte fora de `FORECAST_HORIZONS`, ou `target_date` diferente de `reference_date + horizon_days`;
+- tem `predicted_value` não numérico ou não positivo;
+- aponta para uma versão de dataset inexistente ou inválida, ou diferente da do restante do lote;
+- tem `reference_date` posterior ao corte da versão;
+- repete `(reference_date, horizon_days, model_version)` dentro do lote.
+
+Cada lote também gera uma linha em `audit.model_runs` por `(pipeline_run_id, model_version)`.
 
 ---
 
 ## 6. Exemplo de Função Consumidora Simulada (Mock Consumer)
 
-Conforme estabelecido no prompt, **não** implementamos o modelo de rede neural real. Criamos a função consumidora simulada para validação e testes contratuais:
+Conforme estabelecido no prompt, **não** implementamos o modelo de rede neural real. A função consumidora simulada, para validação e testes contratuais, está em `src/model_contract.py`; `python -m src.model_contract` executa o ciclo completo (ler a última versão, prever, registrar). Em essência:
 
 ```python
 """Exemplo de consumidor simulado de features e gerador de previsões fictícias."""

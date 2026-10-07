@@ -126,8 +126,10 @@ $$X_t \longrightarrow y_{t+h}$$
 ### Stored Procedures (Transações no Banco):
 - `core.sp_upsert_market_observations(p_run_id UUID)`: Migra e deduplica de staging para core.
 - `core.sp_upsert_weather_observations(p_run_id UUID)`: Consolida dados climáticos.
-- `features.sp_create_dataset_version(...)`: Registra e congela um snapshot de features imutável.
-- `audit.sp_register_pipeline_run(...)`: Registra início e término de execuções.
+- `audit.sp_register_pipeline_start(...)` / `audit.sp_register_pipeline_finish(...)`: Registram início e término de execuções.
+- `audit.fn_emit_event(...)`: Registra eventos em `audit.pending_events`.
+
+O congelamento do snapshot de features não é uma procedure: fica em `src/dataset_versioning.py`, porque o checksum é calculado sobre a matriz antes da gravação e a versão só é validada depois que todas as linhas entram, na mesma transação.
 
 ---
 

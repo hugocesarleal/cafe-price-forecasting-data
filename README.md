@@ -77,9 +77,10 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── ingestion.py             # Pipeline raw → staging → core (15 passos)
 │   ├── transformations.py       # Transformações causais (janelas, defasagens, alvos)
 │   ├── feature_builder.py       # core → candidatas → filtro KEEP + alvos y_7d…y_90d
+│   ├── dataset_versioning.py    # Versões imutáveis do dataset, com checksum
+│   ├── model_contract.py        # Contrato com o modelo: consumo e registro de previsões
 │   │
 │   │   — Em implementação —
-│   ├── dataset_versioning.py    # Snapshots imutáveis com checksum
 │   ├── pruning.py               # Janela histórica e poda lógica (máx. 2 anos)
 │   └── pipeline.py              # Orquestrador completo (15 passos)
 │
@@ -181,27 +182,53 @@ Toda execução fica auditada em `audit.pipeline_runs` (status, contagens, erro)
 python -m src.feature_builder
 ```
 
-Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grade diária e imprime um resumo em JSON (janela, colunas, alvos preenchidos, candidatas excluídas pelo catálogo). O comando **não grava nada**: a gravação em `features.model_features` é feita por `publish_features`, que precisa de uma versão em `features.dataset_versions` (etapa de versionamento, ainda pendente).
-
-```python
-from src.db import get_connection
-from src.feature_builder import build_feature_matrix, publish_features
-
-with get_connection() as conn:
-    matriz = build_feature_matrix(conn)            # ou cutoff_date=..., start_date=...
-    publish_features(conn, dataset_version_id, matriz)
-    conn.commit()
-```
+Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grade diária e imprime um resumo em JSON (janela, colunas, alvos preenchidos, candidatas excluídas pelo catálogo). O comando **não grava nada** — serve para inspecionar a matriz antes de publicar.
 
 Só entram as variáveis que o catálogo marca como `KEEP`. Uma variável `KEEP` sem dado em `core` (uma região ausente, por exemplo) interrompe a construção em vez de publicar uma coluna vazia.
 
-### 7. Executar os testes
+### 7. Publicar uma versão do dataset
+
+```bash
+python -m src.dataset_versioning
+```
+
+Constrói as features, roda as checagens de qualidade e congela o resultado numa versão de `features.dataset_versions`, assinada por SHA-256. O trigger emite `DATASET_READY` em `audit.pending_events` quando a versão fica válida.
+
+| Situação | Resultado |
+|---|---|
+| Conteúdo idêntico ao de uma versão válida | Nenhuma versão nova; a existente é devolvida (`reused`) |
+| Mesmo corte, conteúdo revisado | Versão nova, com o início do checksum na tag |
+| Checagem **CRÍTICA** reprovada | Nenhuma versão criada, execução `FAILED`, a última versão válida continua sendo a entregue |
+| Erro durante a gravação | Transação desfeita: nem versão, nem linhas parciais |
+| Outra execução em andamento | Execução `BLOCKED` |
+
+Para retirar de circulação uma versão já publicada (as linhas ficam preservadas):
+
+```python
+from src.db import get_connection
+from src.dataset_versioning import invalidate_dataset_version, verify_dataset_version
+
+with get_connection() as conn:
+    verify_dataset_version(conn, dataset_version_id)   # o gravado ainda bate com o checksum?
+    invalidate_dataset_version(conn, dataset_version_id, "motivo")
+    conn.commit()
+```
+
+### 8. Simular o consumo pelo modelo
+
+```bash
+python -m src.model_contract
+```
+
+Lê a última versão válida, gera previsões fictícias para os horizontes configurados e as registra em `predictions.forecasts`. Não é o modelo: é um consumidor de exemplo que exercita o contrato de ponta a ponta.
+
+### 9. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py` e a maior parte de `test_feature_catalog.py` rodam em memória, sem banco.
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
 
 ---
 
@@ -279,36 +306,36 @@ python -m pytest tests/ -v --tb=short
 | `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
 | `test_no_future_leakage.py` | 9 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
 | `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
-| `test_dataset_versioning.py` | — | *(em desenvolvimento)* Versionamento, previsão por horizonte e recuperação (18–20) |
+| `test_dataset_versioning.py` | 20 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20) |
+| `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
 | `test_pruning.py` | — | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw (12, 13) |
-| `test_model_contract.py` | — | *(em desenvolvimento)* Consumidor simulado e registro de previsões |
 
-Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 15 deles já estão implementados.
+Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 18 deles já estão implementados.
 
 ---
 
 ## Contrato com o Time de ML
 
-O componente de rede neural **consome** a view:
+O componente de rede neural **consome** a última versão válida:
 
-```sql
-SELECT * FROM features.model_features
-JOIN features.dataset_versions dv USING (dataset_version_id)
-WHERE dv.is_valid = TRUE
-ORDER BY (SELECT dataset_version_id FROM features.dataset_versions
-          WHERE is_valid = TRUE ORDER BY created_at DESC LIMIT 1),
-         data_ref ASC;
+```python
+from src.db import get_connection
+from src.model_contract import get_latest_dataset, load_features, register_forecasts
+
+with get_connection() as conn:
+    dataset = get_latest_dataset(conn)    # versão, corte, colunas e tipos, horizontes, qualidade
+    features = load_features(conn, dataset["dataset_version_id"])
+    ...
 ```
 
-E **grava** previsões em:
+E **devolve** as previsões, uma por horizonte:
 
-```sql
-INSERT INTO predictions.forecasts
-  (forecast_id, reference_date, target_date, horizon_days,
-   predicted_value, dataset_version_id, model_version, pipeline_run_id)
-VALUES (…)
-ON CONFLICT (reference_date, horizon_days, model_version) DO UPDATE SET …;
+```python
+    register_forecasts(conn, previsoes)   # valida o lote e faz upsert em predictions.forecasts
+    conn.commit()
 ```
+
+Uma previsão repetida para a mesma `(reference_date, horizon_days, model_version)` é atualizada, não duplicada.
 
 Ver [`docs/model_contract.md`](docs/model_contract.md) para o contrato completo.
 
