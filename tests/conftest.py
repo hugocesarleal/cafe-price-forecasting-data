@@ -2,9 +2,12 @@
 
 import contextlib
 import hashlib
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from src.agrobr_client import AgrobrClient, SourceFetchError, SourceFile
@@ -241,3 +244,94 @@ def executar_pipeline(ingest_conn):
         return pipeline.run(**kwargs)
 
     return _run
+
+
+# ---------------------------------------------------------------------------
+# Features: core sintético e versões de dataset descartáveis
+# ---------------------------------------------------------------------------
+
+# Variáveis que o catálogo semeado libera para features.model_features.
+KEEP_ESPERADAS = (
+    "preco_robusta", "usd_brl", "b3_cafe_ajuste", "ice_kc",
+    "temp_media_cerrado", "umidade_rel_sulmg", "umidade_rel_cerrado",
+    "radiacao_mj_sulmg", "radiacao_mj_cerrado",
+    "precip_30d_sulmg", "precip_30d_cerrado", "precip_90d_sulmg", "precip_90d_cerrado",
+    "tmin_min_30d_sulmg", "tmin_min_30d_cerrado",
+    "dias_quente_30d_sulmg", "dias_quente_30d_cerrado",
+    "sin_ano", "cos_ano",
+)
+
+REGIOES_TESTE = ("bambui", "sulmg", "cerrado")
+
+# Prefixo exclusivo das versões criadas pelos testes, usado para apagá-las.
+TAG_VERSAO_TESTE = "teste-"
+
+
+def core_sintetico(dias: int = 400, inicio: date = DATA_BASE, seed: int = 42):
+    """Mercado (só dias úteis) e clima diário no formato lido de ``core``."""
+    rng = np.random.default_rng(seed)
+    grade = pd.date_range(inicio, periods=dias, freq="D")
+    uteis = grade[grade.dayofweek < 5]
+    n = len(uteis)
+
+    mercado = pd.DataFrame({
+        "preco_arabica": 1000 + rng.normal(0, 5, n).cumsum(),
+        "preco_robusta": 600 + rng.normal(0, 3, n).cumsum(),
+        "usd_brl": 5 + rng.normal(0, 0.01, n).cumsum(),
+        "b3_cafe_ajuste": 200 + rng.normal(0, 1, n).cumsum(),
+        "ice_kc": 150 + rng.normal(0, 1, n).cumsum(),
+    }, index=uteis).round(2)
+    mercado.index.name = "data_ref"
+
+    blocos = []
+    for regiao in REGIOES_TESTE:
+        temp_min = rng.uniform(8, 18, dias)
+        temp_max = rng.uniform(22, 36, dias)
+        bloco = pd.DataFrame({
+            "temp_min": temp_min,
+            "temp_max": temp_max,
+            "temp_media": (temp_min + temp_max) / 2,
+            "precip_mm": rng.uniform(0, 20, dias),
+            "umidade_rel": rng.uniform(40, 90, dias),
+            "radiacao_mj": rng.uniform(10, 25, dias),
+            "vento_ms": rng.uniform(1, 5, dias),
+        }).round(2)
+        bloco.insert(0, "region", regiao)
+        bloco.insert(0, "data_ref", grade)
+        blocos.append(bloco)
+    return mercado, pd.concat(blocos, ignore_index=True)
+
+
+def purge_test_versions(conn) -> None:
+    """Apaga as versões de dataset criadas por testes (as features vão em cascata)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM features.dataset_versions WHERE version_tag LIKE %s",
+            (TAG_VERSAO_TESTE + "%",),
+        )
+    conn.commit()
+
+
+@pytest.fixture
+def versao_teste(ingest_conn):
+    """Versão de dataset descartável; devolve o ``dataset_version_id``.
+
+    Nasce com ``is_valid = FALSE`` para não emitir DATASET_READY nem ser lida
+    por um consumidor real do banco.
+    """
+    purge_test_versions(ingest_conn)
+    version_id = str(uuid.uuid4())
+    with ingest_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO features.dataset_versions "
+            "(dataset_version_id, version_tag, cutoff_date, start_date, "
+            " sha256_checksum, is_valid) VALUES (%s, %s, %s, %s, %s, FALSE)",
+            (version_id, TAG_VERSAO_TESTE + version_id[:8], DATA_BASE, DATA_BASE, HASH_STUB),
+        )
+    ingest_conn.commit()
+    try:
+        yield version_id
+    finally:
+        with contextlib.suppress(Exception):
+            ingest_conn.rollback()
+            purge_test_versions(ingest_conn)

@@ -75,10 +75,10 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── agrobr_client.py         # Adaptador Agro.br (modo real/simulado)
 │   ├── validation.py            # 12 checagens de qualidade e limites físicos
 │   ├── ingestion.py             # Pipeline raw → staging → core (15 passos)
+│   ├── transformations.py       # Transformações causais (janelas, defasagens, alvos)
+│   ├── feature_builder.py       # core → candidatas → filtro KEEP + alvos y_7d…y_90d
 │   │
 │   │   — Em implementação —
-│   ├── transformations.py       # Features derivadas causais
-│   ├── feature_builder.py       # Filtro KEEP + geração dos alvos y_7d…y_90d
 │   ├── dataset_versioning.py    # Snapshots imutáveis com checksum
 │   ├── pruning.py               # Janela histórica e poda lógica (máx. 2 anos)
 │   └── pipeline.py              # Orquestrador completo (15 passos)
@@ -175,13 +175,33 @@ run_ingestion(cutoff_date=date(2026, 1, 1), start_date=date(2025, 1, 1))
 
 Toda execução fica auditada em `audit.pipeline_runs` (status, contagens, erro) e em `audit.data_quality_checks` (uma linha por checagem).
 
-### 6. Executar os testes
+### 6. Construir as features
+
+```bash
+python -m src.feature_builder
+```
+
+Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grade diária e imprime um resumo em JSON (janela, colunas, alvos preenchidos, candidatas excluídas pelo catálogo). O comando **não grava nada**: a gravação em `features.model_features` é feita por `publish_features`, que precisa de uma versão em `features.dataset_versions` (etapa de versionamento, ainda pendente).
+
+```python
+from src.db import get_connection
+from src.feature_builder import build_feature_matrix, publish_features
+
+with get_connection() as conn:
+    matriz = build_feature_matrix(conn)            # ou cutoff_date=..., start_date=...
+    publish_features(conn, dataset_version_id, matriz)
+    conn.commit()
+```
+
+Só entram as variáveis que o catálogo marca como `KEEP`. Uma variável `KEEP` sem dado em `core` (uma região ausente, por exemplo) interrompe a construção em vez de publicar uma coluna vazia.
+
+### 7. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais.
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py` e a maior parte de `test_feature_catalog.py` rodam em memória, sem banco.
 
 ---
 
@@ -234,7 +254,7 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 
 | Garantia | Como é implementada |
 |---|---|
-| **Sem data leakage** | Features de $t$ só usam dados disponíveis até $t$; séries defasadas (COT, ONI) propagadas a partir de `data_pub` |
+| **Sem data leakage** | Nada posterior ao corte é lido; janelas fechadas em $t$; preenchimento só para frente e com limite; `preco_arabica` do dia nunca é feature; fontes com atraso deslocadas por `PUBLICATION_LAG_DAYS` |
 | **Imutabilidade do raw** | `raw.market_observations` e `raw.weather_observations` nunca têm linhas deletadas |
 | **Idempotência** | Upsert com `ON CONFLICT … DO UPDATE SET col = COALESCE(excluded.col, atual)` |
 | **Sem concorrência** | `pg_try_advisory_lock` impede duas instâncias simultâneas |
@@ -256,12 +276,14 @@ python -m pytest tests/ -v --tb=short
 | `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
 | `test_ingestion.py` | 16 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10) e lock concorrente (11) |
 | `test_idempotency.py` | 9 | Carga repetida não duplica (3), deduplicação dentro e entre origens (4), upsert sem duplicar datas e com `COALESCE` (5) |
-| `test_no_future_leakage.py` | — | *(em desenvolvimento)* Anti-leakage matemático (16) |
-| `test_feature_catalog.py` | — | *(em desenvolvimento)* Isolamento KEEP vs DROP (14, 15, 17–20) |
+| `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
+| `test_no_future_leakage.py` | 9 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
+| `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
+| `test_dataset_versioning.py` | — | *(em desenvolvimento)* Versionamento, previsão por horizonte e recuperação (18–20) |
 | `test_pruning.py` | — | *(em desenvolvimento)* Teto de 2 anos, imutabilidade do raw (12, 13) |
 | `test_model_contract.py` | — | *(em desenvolvimento)* Consumidor simulado e registro de previsões |
 
-Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 11 deles já estão implementados.
+Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; 15 deles já estão implementados.
 
 ---
 

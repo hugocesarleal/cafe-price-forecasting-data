@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As etapas **1–4 estão concluídas**; as etapas **5–8 estão pendentes** — o que resta é a camada de features, o versionamento do dataset, o agendamento dos jobs e os testes que dependem deles (a fundação de banco e o pipeline de ingestão já estão prontos).
+O documento define **8 etapas de entrega**. As etapas **1–5 estão concluídas**; as etapas **6–8 estão pendentes** — o que resta é o versionamento do dataset, o agendamento dos jobs e os testes que dependem deles (a fundação de banco, o pipeline de ingestão e a camada de features já estão prontos).
 
 ---
 
@@ -71,25 +71,35 @@ O documento define **8 etapas de entrega**. As etapas **1–4 estão concluídas
   - [x] abertura e fechamento de uma carga — `audit.sp_register_pipeline_start`, `audit.sp_register_pipeline_finish`
   - [x] registro de eventos — `audit.fn_emit_event`
   - [ ] deduplicação como procedure — hoje é feita em Python (`validation.deduplicate`) antes do `staging`, o que mantém a regra testável; migrar para SQL só se houver outro consumidor
-  - [ ] atualização de estatísticas — depende da etapa 5 (features)
+  - [ ] atualização de estatísticas — depende da etapa 6 (versionamento)
 
 > **Armadilha conhecida**: `raw.ingestion_files.file_hash` é `CHAR(64)`. O PostgreSQL completa valores mais curtos com espaços, então qualquer comparação de hash precisa de `.strip()` — sem isso toda coleta pareceria "alterada" e o pipeline republicaria tudo, sempre. Já tratado em `src/ingestion.py`.
 
-## Etapa 5 — Features selecionadas ❌ PENDENTE
+## Etapa 5 — Features selecionadas ✅ CONCLUÍDA
 
-- [ ] **`src/feature_builder.py`** / **`src/transformations.py`**:
-  - [ ] alvos deslocados: `y_7d`, `y_15d`, `y_30d`, `y_90d` (parâmetros já existem no config)
-  - [ ] defasagens de `preco_arabica` e `preco_robusta`
-  - [ ] retornos passados, médias móveis passadas, volatilidade passada
-  - [ ] `sin_ano` e `cos_ano` mantidos juntos (codificação cíclica)
-  - [ ] consultas padrão só selecionam variáveis KEEP/TARGET do catálogo; DROP nunca entra em `features.model_features`
-- [ ] **Regras contra vazamento temporal** (`X_t → y_(t+h)`, h > 0):
-  - [ ] nenhum dado publicado depois de t entra em `X_t`
-  - [ ] janelas móveis calculadas somente até t
-  - [ ] preenchimento causal
-  - [ ] tratamento de dados de mercado publicados após o fechamento
-  - [ ] separação temporal entre treino, validação e teste
-  - [ ] `preco_arabica` contemporâneo nunca usado como feature para prever a si mesmo
+- [x] **`src/transformations.py`** — transformações causais puras (sem banco):
+  - [x] alvos deslocados (`shift_target`)
+  - [x] defasagens (`lag`), retornos (`log_return`), médias móveis (`rolling_mean`) e volatilidade (`rolling_volatility`)
+  - [x] janelas fechadas em t para clima (`rolling_sum`, `rolling_min`, `rolling_count_above`)
+  - [x] `sin_ano` e `cos_ano` sempre em par (`cyclic_year`)
+  - [x] separação temporal entre treino, validação e teste com embargo (`temporal_split`)
+- [x] **`src/feature_builder.py`** — lê `core`, calcula as candidatas, filtra pelo catálogo e grava em `features.model_features`:
+  - [x] alvos `y_7d`, `y_15d`, `y_30d`, `y_90d` a partir de `FORECAST_HORIZONS`
+  - [x] só variáveis `KEEP` do catálogo são publicadas; DROP e não catalogadas são calculadas e descartadas
+  - [x] variável `KEEP` sem cálculo ou sem coluna na tabela interrompe a construção (não publica coluna vazia)
+- [x] **Regras contra vazamento temporal** (`X_t → y_(t+h)`, h > 0):
+  - [x] nenhum dado posterior ao corte é lido de `core`
+  - [x] janelas móveis calculadas somente até t
+  - [x] preenchimento causal: só para frente e com limite (6 dias em mercado, 3 em clima)
+  - [x] dados publicados com atraso: deslocamento por variável em `PUBLICATION_LAG_DAYS`
+  - [x] `preco_arabica` contemporâneo nunca é feature; estatísticas dele só entram defasadas em um dia
+  - [x] alvo de t vem sempre de um pregão posterior a t (limite de preenchimento < menor horizonte)
+
+> **Decisões que valem revisão**:
+> - As defasagens, retornos, médias e volatilidade de preço são calculados, mas **não são publicados**: o catálogo marca `ret_1d`, `vol_20d` e `preco_media_20d` como DROP, as defasagens não estão catalogadas e `features.model_features` não tem coluna para elas. Liberá-las exige mudar o catálogo e criar uma migration.
+> - A grade é de dias corridos. Em dia sem pregão, as features de mercado repetem o último fechamento e o alvo vale o último indicador publicado até `t+h`.
+> - `PUBLICATION_LAG_DAYS` está vazio (tudo disponível no fechamento do próprio dia). `core` não guarda data de publicação, então o atraso real de cada fonte (NASA POWER, por exemplo) precisa ser informado quando o modo real existir.
+> - `publish_features` exige uma versão já criada em `features.dataset_versions` e não faz commit: a criação da versão é a etapa 6.
 
 ## Etapa 6 — Versionamento e auditoria ❌ PENDENTE
 
@@ -115,16 +125,18 @@ O documento define **8 etapas de entrega**. As etapas **1–4 estão concluídas
   - [ ] retry seguro após falha
 - [ ] Sem duplicar dados/previsões entre jobs; registrar hora da última observação disponível e da última ingestão
 
-## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (11 de 20 obrigatórios prontos)
+## Etapa 8 — Testes e README 🔄 EM ANDAMENTO (15 de 20 obrigatórios prontos)
 
-Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency.py` (3, 4, 5), `test_validation.py` (6, 7, 8 + as 12 checagens), `test_ingestion.py` (9, 10, 11). Faltam 9:
+Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency.py` (3, 4, 5), `test_validation.py` (6, 7, 8 + as 12 checagens), `test_ingestion.py` (9, 10, 11), `test_feature_catalog.py` (14, 15, 17), `test_no_future_leakage.py` (16). Faltam 5:
 
 - [x] `test_idempotency.py` — carga idempotente (3), deduplicação (4), upsert (5)
 - [x] `test_validation.py` — arquivo com coluna ausente (6), arquivo com tipo inválido (7), valor fora do limite (8)
 - [x] `test_ingestion.py` — falha de conexão (9), retry (10), bloqueio de execução concorrente (11)
 - [ ] `test_pruning.py` — poda limitada a 2 anos (12), preservação de dados brutos (13)
-- [ ] `test_feature_catalog.py` — seleção somente KEEP/TARGET (14), exclusão de DROP/KEEP_WITH_CAVEAT/TEST_ONLY da tabela final (15), geração dos alvos de 7/15/30/90 dias (17), versionamento de features (18), registro da previsão por horizonte (19), recuperação da última versão válida após falha (20)
-- [ ] `test_no_future_leakage.py` — ausência de vazamento temporal (16)
+- [x] `test_feature_catalog.py` — seleção somente KEEP/TARGET (14), exclusão de DROP/KEEP_WITH_CAVEAT/TEST_ONLY da tabela final (15), geração dos alvos de 7/15/30/90 dias (17)
+- [x] `test_no_future_leakage.py` — ausência de vazamento temporal (16)
+- [x] `test_transformations.py` — janelas, preenchimento, calendário e separação temporal
+- [ ] versionamento de features (18), registro da previsão por horizonte (19), recuperação da última versão válida após falha (20) — dependem da etapa 6
 - [ ] `docs/runbook.md` — operação, recuperação e reprocessamento
 
 > Os testes da etapa 4 exigem um PostgreSQL acessível (`.env` com `DB_*`). Eles usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga todo o rastro antes e depois de cada teste, então é seguro rodar contra um banco que já contenha cargas reais.
@@ -133,7 +145,7 @@ Prontos: `test_schema.py` (1), `test_sqlite_migration.py` (2), `test_idempotency
 
 ## Observações operacionais
 
-1. **Ordem recomendada**: seguir a sequência do documento (5 → 6 → 7 → 8). A etapa 8 já foi adiantada nos itens que não dependem de features (3 a 11); os testes 12 a 20 só saem depois das etapas 5 e 6. Dá para paralelizar `docs/runbook.md` com a etapa 5, já que o pipeline de ingestão está estável.
+1. **Ordem recomendada**: seguir a sequência do documento (6 → 7 → 8). A etapa 8 já foi adiantada nos itens que não dependem de versionamento (3 a 11 e 14 a 17); os testes 12, 13 e 18 a 20 só saem depois da etapa 6. Dá para paralelizar `docs/runbook.md` com a etapa 6, já que ingestão e features estão estáveis.
 2. **Submódulo `base/`**: o clone ainda não traz a pasta `base/` (gitlink sem `.gitmodules`). Quem clonar precisa clonar `hugocesarleal/base` manualmente para dentro dela, ou adicionarmos o `.gitmodules` + `--recurse-submodules`.
 3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
 4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.
