@@ -42,6 +42,13 @@ base_modelo.csv
 # EXCEÇÃO: CSVs de dados manuais históricos são versionados
 !base/dados_manuais/*.csv
 
+# Planilhas baixadas do CEPEA: insumo de `python -m src.cepea_series --importar`
+base/dados_manuais/*.xls
+base/dados_manuais/*.bak
+
+# Histórico git da pasta base/ de quando ela era um repositório separado
+.base-historico.git/
+
 # ============================================================
 # Logs e Temporários
 # ============================================================

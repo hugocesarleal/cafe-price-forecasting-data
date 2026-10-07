@@ -57,8 +57,8 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 
 ```
 .
-├── base/                        # Base legada SQLite + dados manuais CEPEA
-│   ├── dados_manuais/           # CSVs históricos CEPEA (versionados)
+├── base/                        # Base legada SQLite + séries do CEPEA (pasta comum deste repositório)
+│   ├── dados_manuais/           # CSVs das séries do CEPEA (versionados; atualizados por src.cepea_series)
 │   ├── cafe_centro_oeste_mg.db  # Banco SQLite legado (não versionado)
 │   ├── build_base_cafe.py       # Script original de ETL do SQLite
 │   └── schema.sql               # Schema original SQLite

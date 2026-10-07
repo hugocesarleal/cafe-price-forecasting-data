@@ -201,7 +201,14 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > - O leitor da planilha foi escrito a partir do script legado e conferido com as duas planilhas reais do CEPEA em 07/10/2026: os preços das datas em comum com os CSVs anteriores coincidiram exatamente.
 > - `usd_brl_compra` e as variáveis DROP do legado (Selic, IPCA, COT, DXY, Brent, ONI) não são coletadas.
 
-## Observações operacionais## Critérios de aceite do documento
+## Observações operacionais
+
+1. **O que falta para fechar**: executar `python -m pytest tests/ -v` com PostgreSQL disponível e resolver o que aparecer.
+2. **Pasta `base/`**: faz parte deste repositório desde 07/10/2026 (antes era um vínculo de submódulo sem `.gitmodules`, e o conteúdo não chegava a quem clonava). São versionados o script legado, o schema do SQLite, o README e os CSVs do CEPEA em `base/dados_manuais/`. O SQLite (`*.db`), `base_modelo.csv`, as auditorias e as planilhas `.xls` ficam fora, pelo `.gitignore`.
+3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
+4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.
+
+## Critérios de aceite do documento
 
 Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementado, verificação depende de PostgreSQL · ❌ não atendido.
 
@@ -233,6 +240,6 @@ Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementad
 - **Bancos separados para simulado e real**: nada impede hoje uma ingestão simulada de gravar por cima de dados reais.
 - **Job de pós-fechamento e a B3**: às 19:00 o arquivo de ajustes do dia pode ainda não estar publicado; a versão gerada repete o ajuste da véspera para aquele dia.
 - **Janela histórica**: 9 anos contra ~1.096 dias; decisão da equipe.
-- **Submódulo `base/`**: gitlink sem `.gitmodules`.
+- **SQLite legado fora do repositório**: `base/cafe_centro_oeste_mg.db` não é versionado. `src.sqlite_migrator` e `test_sqlite_migration.py` dependem dele; no modo real ele não é necessário.
 - **Imutabilidade das versões no banco**: hoje garantida pelo código e conferível por checksum, sem trigger.
 - **Liberação do lock na ingestão após erro SQL**: a liberação roda antes do rollback; visto na leitura do código, não reproduzido.
