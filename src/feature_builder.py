@@ -55,10 +55,19 @@ MARKET_FILL_LIMIT_DAYS = 6
 WEATHER_FILL_LIMIT_DAYS = 3
 
 # Atraso, em dias, entre a data de referência e a disponibilidade do dado, por
-# variável de core. Vazio = tudo disponível no fechamento do próprio dia, que é
-# o caso do job diário das 00:00 processando o dia anterior. Uma fonte que só
-# publica em t+2 deve entrar aqui como {"variavel": 2}.
-PUBLICATION_LAG_DAYS: Dict[str, int] = {}
+# variável de core. Uma série com atraso N só entra nas features de t com o
+# valor de t-N, que é o que de fato existe quando a linha de t é montada em
+# produção; sem isso o treino veria um clima que a previsão nunca terá.
+#
+# Mercado não tem atraso: no job diário das 00:00 tudo do dia anterior já saiu.
+# Clima vem do NASA POWER, que publica dias depois — medido em 07/10/2026, o
+# último dia disponível era t-3 para as séries meteorológicas e t-5 para a
+# radiação. Revise se a fonte ou a latência mudarem.
+PUBLICATION_LAG_DAYS: Dict[str, int] = {
+    "temp_min": 3, "temp_max": 3, "temp_media": 3, "precip_mm": 3,
+    "umidade_rel": 3, "vento_ms": 3,
+    "radiacao_mj": 5,
+}
 
 HOT_DAY_THRESHOLD_C = 32.0
 PRICE_LAGS_DAYS: Sequence[int] = (1, 7)

@@ -16,6 +16,8 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 - `DROP`: Descartada das features do modelo; retida em raw/core para histórico ou auditoria.
 - `INTERNAL_INPUT`: Usada exclusivamente para derivação de outras variáveis (ex.: mínimas diárias brutas para calcular `tmin_min_30d`), mas não publicada isoladamente.
 
+> **Atraso de publicação do clima**: toda variável de clima, bruta ou calculada, entra na matriz de features com o atraso do NASA POWER — 3 dias (5 para `radiacao_mj_*`). "Últimos 30 dias" significa os 30 dias terminados em $t-3$. Ver `PUBLICATION_LAG_DAYS` em `src/feature_builder.py`.
+
 ### Tabela do Catálogo
 
 | variable_name | source_group | source_name | unit | is_raw_available | is_required_for_feature_calculation | is_model_feature | selection_status | selection_reason |

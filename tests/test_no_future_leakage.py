@@ -15,7 +15,9 @@ import pytest
 from conftest import DATA_BASE, KEEP_ESPERADAS, core_sintetico
 from src.feature_builder import (
     MARKET_FILL_LIMIT_DAYS,
+    PUBLICATION_LAG_DAYS,
     WARMUP_DAYS,
+    WEATHER_VARIABLES,
     assemble_matrix,
     build_candidates,
     build_targets,
@@ -126,7 +128,7 @@ def test_limite_de_preenchimento_e_menor_que_o_menor_horizonte():
 
 def test_fonte_publicada_com_atraso_so_aparece_depois(core):
     mercado, clima = core
-    sem_atraso = build_candidates(mercado, clima, INICIO, CORTE)
+    sem_atraso = build_candidates(mercado, clima, INICIO, CORTE, publication_lag={})
     com_atraso = build_candidates(mercado, clima, INICIO, CORTE,
                                   publication_lag={"usd_brl": 2, "precip_mm": 2})
 
@@ -139,9 +141,25 @@ def test_fonte_publicada_com_atraso_so_aparece_depois(core):
     assert com_atraso.loc[dia, "ice_kc"] == sem_atraso.loc[dia, "ice_kc"]
 
 
+def test_clima_entra_com_o_atraso_de_publicacao_da_fonte(core):
+    """Por padrão a linha de t só enxerga o clima que já estaria publicado em t."""
+    mercado, clima = core
+    assert set(PUBLICATION_LAG_DAYS) == set(WEATHER_VARIABLES),         "Toda série de clima tem atraso declarado; as de mercado, nenhum"
+    padrao = build_candidates(mercado, clima, INICIO, CORTE)
+    sem_atraso = build_candidates(mercado, clima, INICIO, CORTE, publication_lag={})
+    dia = pd.Timestamp(MEIO)
+
+    for coluna, variavel in (("umidade_rel_sulmg", "umidade_rel"),
+                             ("precip_30d_cerrado", "precip_mm"),
+                             ("radiacao_mj_sulmg", "radiacao_mj")):
+        atraso = pd.Timedelta(days=PUBLICATION_LAG_DAYS[variavel])
+        assert padrao.loc[dia, coluna] == pytest.approx(sem_atraso.loc[dia - atraso, coluna])
+    assert padrao.loc[dia, "usd_brl"] == sem_atraso.loc[dia, "usd_brl"]
+
+
 def test_janelas_moveis_fecham_em_t(core):
     mercado, clima = core
-    candidatas = build_candidates(mercado, clima, INICIO, CORTE)
+    candidatas = build_candidates(mercado, clima, INICIO, CORTE, publication_lag={})
     dia = pd.Timestamp(MEIO)
 
     sulmg = clima[clima["region"] == "sulmg"].set_index("data_ref")

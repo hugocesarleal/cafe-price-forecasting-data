@@ -28,7 +28,6 @@ from typing import Any, Dict, Optional
 import psycopg
 
 from src.agrobr_client import AgrobrClient, get_agrobr_client
-from src.config import settings
 from src.dataset_versioning import (
     JOB_NAME as JOB_DATASET,
     register_run_finish,
@@ -39,8 +38,6 @@ from src.db import acquire_advisory_lock, get_connection
 from src.ingestion import JOB_NAME as JOB_INGESTAO, IngestionPipeline
 from src.logging_config import logger
 
-MODOS_SIMULADOS = ("simulated", "simulado", "simulate")
-
 STATUS_SUCCESS = "SUCCESS"
 STATUS_FAILED = "FAILED"
 STATUS_BLOCKED = "BLOCKED"
@@ -50,18 +47,11 @@ def build_client(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
 ) -> AgrobrClient:
-    """Cliente de coleta do modo configurado, restrito à janela pedida.
+    """Cliente de coleta do modo configurado em ``AGROBR_MODE``, na janela pedida.
 
-    Só o modo simulado aceita janela; pedir uma no modo real é erro, para que um
-    reprocessamento de período nunca vire, em silêncio, uma coleta completa.
+    Sem janela, cada cliente usa a sua padrão: ``HISTORICAL_YEARS`` até hoje.
     """
-    simulado = (settings.AGROBR_MODE or "simulated").strip().lower() in MODOS_SIMULADOS
     janela = {k: v for k, v in (("start_date", start_date), ("end_date", end_date)) if v}
-    if janela and not simulado:
-        raise ValueError(
-            "Janela de coleta (start_date/end_date) só é suportada com "
-            f"AGROBR_MODE=simulated; modo atual: {settings.AGROBR_MODE!r}."
-        )
     return get_agrobr_client(**janela)
 
 

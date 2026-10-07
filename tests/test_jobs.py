@@ -211,6 +211,17 @@ def test_cada_job_fecha_o_dia_certo(run_job_falso, capsys, modulo, corte):
     assert '"status": "SUCCESS"' in capsys.readouterr().out
 
 
+def test_janela_de_coleta_curta_e_opcional(run_job_falso, monkeypatch):
+    chamadas, _ = run_job_falso
+
+    update_daily.main([])                                   # padrão: janela inteira
+    monkeypatch.setattr(settings, "COLLECTION_WINDOW_DAYS", 45)
+    update_daily.main([])
+
+    assert chamadas[0][1] == {"cutoff_date": date(2026, 10, 6)}
+    assert chamadas[1][1] == {"cutoff_date": date(2026, 10, 6), "start_date": date(2026, 8, 22)}
+
+
 def test_corte_pode_ser_informado_na_linha_de_comando(run_job_falso):
     chamadas, _ = run_job_falso
 
@@ -268,11 +279,15 @@ def test_reprocessamento_rejeita_janela_invalida(run_job_falso, argumentos):
 # Cliente de coleta
 # ---------------------------------------------------------------------------
 
-def test_janela_de_coleta_no_modo_real_e_erro_e_nao_coleta_completa(monkeypatch):
+def test_modo_real_recebe_a_janela_pedida(monkeypatch):
+    from src.agrobr_real import RealAgrobrClient
+
     monkeypatch.setattr(settings, "AGROBR_MODE", "real")
 
-    with pytest.raises(ValueError, match="AGROBR_MODE=simulated"):
-        pipeline.build_client(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+    cliente = pipeline.build_client(date(2025, 1, 1), date(2025, 12, 31))
+
+    assert isinstance(cliente, RealAgrobrClient)
+    assert (cliente.start_date, cliente.end_date) == (date(2025, 1, 1), date(2025, 12, 31))
 
 
 def test_modo_simulado_recebe_a_janela_pedida(monkeypatch):

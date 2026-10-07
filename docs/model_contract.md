@@ -86,6 +86,7 @@ ORDER BY mf.data_ref ASC;
 2. O valor contemporâneo `preco_arabica(t)` **nunca** é fornecido como entrada em $X_t$ para prever $t$.
 3. Se o modelo desejar utilizar defasagens do alvo, deverá usar lags estritos: $preco\_arabica_{t-1}, preco\_arabica_{t-2}$, etc.
 4. As variáveis `sin_ano` e `cos_ano` devem ser utilizadas conjuntamente para preservar a topologia cíclica da sazonalidade anual.
+5. As variáveis de clima entram com o atraso de publicação da fonte (NASA POWER): em $X_t$, o clima é o de $t-3$ (radiação: $t-5$). Assim `precip_30d_*` de $t$ é a chuva acumulada nos 30 dias terminados em $t-3$. É o mesmo clima que estará disponível quando a previsão de $t$ for feita.
 
 ---
 

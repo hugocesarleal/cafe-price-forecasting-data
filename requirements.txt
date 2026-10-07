@@ -8,3 +8,5 @@ pytest>=8.0.0
 pytz>=2024.1
 tenacity>=8.2.3
 requests>=2.31.0
+agrobr==1.1.0
+yfinance>=1.0

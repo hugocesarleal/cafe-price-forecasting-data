@@ -135,6 +135,9 @@ O congelamento do snapshot de features não é uma procedure: fica em `src/datas
 
 ## 8. Integração com o Agro.br
 
-O módulo `src/agrobr_client.py` implementa um adaptador com padrão Strategy:
-- **Modo Real:** Consome bibliotecas públicas do Agro.br e APIs conectadas (BCB, NASA POWER, B3).
-- **Modo Simulado / Fallback:** Gera dados sintéticos consistentes ou consome arquivos locais (como os CSVs de histórico CEPEA presentes em `base/dados_manuais`) para execução em ambiente de testes ou quando serviços externos estiverem fora do ar.
+A coleta segue o padrão Strategy: `AgrobrClient` (em `src/agrobr_client.py`) define o contrato e a política de novas tentativas, e `AGROBR_MODE` escolhe a implementação.
+
+- **Modo Real** (`src/agrobr_real.py`): usa a biblioteca `agrobr` para CEPEA/ESALQ, BCB PTAX, B3 e NASA POWER, e o Yahoo Finance para o contrato Coffee C da ICE. O histórico do CEPEA vem de CSVs atualizados a partir da planilha do site (`src/cepea_series.py`, por importação do arquivo baixado no navegador, já que o site recusa o download automático); o `agrobr` completa os dias recentes. Os ajustes da B3 são baixados um pregão por vez, em lotes, com cache em disco.
+- **Modo Simulado** (`SimulatedAgrobrClient`): lê os mesmos CSVs do CEPEA e fabrica o resto — câmbio e futuros derivados das colunas de preço, clima por fórmula determinística. Existe para desenvolver e testar o pipeline sem rede; seus dados não servem para treino.
+
+Os dois modos entregam o mesmo formato (`SourceFile` com linhas longas de mercado e clima), então nada depois da coleta sabe de qual deles os dados vieram. Por isso os dois não devem alimentar o mesmo banco.

@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     AGROBR_MODE: str = "simulated"
     AGROBR_TIMEOUT_SECONDS: int = 60
     AGROBR_MAX_RETRIES: int = 3
+    COLLECTION_CACHE_DIR: str = ".cache/coleta"
+    # Tenta baixar a série histórica do CEPEA a cada coleta real. Desligado por
+    # padrão: em 07/10/2026 o site respondia 403 ao download automático.
+    CEPEA_AUTO_DOWNLOAD: bool = False
+    # Dias recoletados pelos jobs agendados; 0 = a janela histórica inteira.
+    COLLECTION_WINDOW_DAYS: int = 0
 
     # Caminhos Locais
     SQLITE_SOURCE_PATH: str = "base/cafe_centro_oeste_mg.db"

@@ -38,7 +38,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 ## Etapa 4 — Ingestão e validação ✅ CONCLUÍDA
 
 - [x] **`src/agrobr_client.py`** — cliente do Agro.br:
-  - [x] baixar dados (modo real via HTTP; `AGROBR_MODE=simulated` usa CSVs locais + séries sintéticas determinísticas)
+  - [x] baixar dados: `AGROBR_MODE=real` coleta CEPEA, BCB PTAX, B3 e NASA POWER pelo `agrobr` e ICE pelo Yahoo Finance (`src/agrobr_real.py`); `AGROBR_MODE=simulated` usa CSVs locais + séries sintéticas determinísticas
   - [x] registrar URL, commit, arquivo, hash e data da coleta em `raw.ingestion_files`
   - [x] detectar mudança na fonte (SHA-256 do conteúdo comparado com a coleta anterior)
   - [x] adaptador configurável + implementação simulada para testes
@@ -98,7 +98,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > **Decisões que valem revisão**:
 > - As defasagens, retornos, médias e volatilidade de preço são calculados, mas **não são publicados**: o catálogo marca `ret_1d`, `vol_20d` e `preco_media_20d` como DROP, as defasagens não estão catalogadas e `features.model_features` não tem coluna para elas. Liberá-las exige mudar o catálogo e criar uma migration.
 > - A grade é de dias corridos. Em dia sem pregão, as features de mercado repetem o último fechamento e o alvo vale o último indicador publicado até `t+h`.
-> - `PUBLICATION_LAG_DAYS` está vazio (tudo disponível no fechamento do próprio dia). `core` não guarda data de publicação, então o atraso real de cada fonte (NASA POWER, por exemplo) precisa ser informado quando o modo real existir.
+> - `PUBLICATION_LAG_DAYS` desloca o clima pelo atraso de publicação do NASA POWER: 3 dias para as séries meteorológicas e 5 para a radiação, medidos em 07/10/2026 numa única coleta. `precip_30d` de t é, portanto, a chuva dos 30 dias terminados em t-3. Mercado não tem atraso. Revise os valores se a latência da fonte mudar.
 > - `publish_features` exige uma versão já criada em `features.dataset_versions` e não faz commit: a criação da versão é a etapa 6.
 
 ## Etapa 6 — Versionamento e auditoria ✅ CONCLUÍDA
@@ -150,7 +150,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > - Só erro inesperado é repetido. Ciclo reprovado por qualidade dos dados ou bloqueado por outro job termina na primeira tentativa.
 > - Se a ingestão é reprovada, o dataset não é reconstruído naquele ciclo.
 > - Os jobs não chamam o modelo: registrar previsões continua sendo iniciativa do componente de rede neural (`src/model_contract.py`).
-> - A janela de `reprocess_period` só existe no modo simulado; no modo real o job falha com erro explícito em vez de fazer uma coleta completa.
+> - `COLLECTION_WINDOW_DAYS` (padrão `0`, janela inteira) permite que os jobs agendados recoletem só os dias recentes. Com `0`, cada execução regrava o histórico todo em `raw`.
 > - O agendador embutido (`--schedule`) é um laço simples em um processo; não há serviço do sistema nem dependência nova.
 
 ## Etapa 8 — Testes e README ✅ CONCLUÍDA (20 de 20 obrigatórios implementados)
@@ -178,14 +178,30 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > - O mínimo `DATASET_MIN_DAYS` como condição para podar é interpretação minha de "mínimo de segurança": com a base legada de ~1.096 dias, qualquer poda é recusada.
 > - `CONFIRM_HISTORICAL_WINDOW` trava a poda, não o pipeline inteiro. O documento fala em recusar a execução "em produção", mas não há hoje uma configuração que diga qual ambiente é produção, e o padrão da flag em `src/config.py` é `true`.
 
-## Observações operacionais
+## Modo real de coleta ✅ IMPLEMENTADO (fora das 8 etapas)
 
-1. **O que falta para fechar**: executar `python -m pytest tests/ -v` com PostgreSQL disponível e resolver o que aparecer.
-2. **Submódulo `base/`**: o clone ainda não traz a pasta `base/` (gitlink sem `.gitmodules`). Quem clonar precisa clonar `hugocesarleal/base` manualmente para dentro dela, ou adicionarmos o `.gitmodules` + `--recurse-submodules`.
-3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
-4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.
+- [x] **`src/agrobr_real.py`** — `RealAgrobrClient`, com as mesmas chamadas do script legado `base/build_base_cafe.py`:
+  - [x] CEPEA: CSV da série + complemento recente pelo `agrobr`, com aviso de buraco entre os dois; `src/cepea_series.py` atualiza o CSV a partir da planilha do site (`--importar` para a baixada pelo navegador), com conferência antes de substituir
+  - [x] BCB PTAX (venda, último boletim do dia)
+  - [x] B3 ICF, 1º vencimento — corrigido o `MemoryError` do legado
+  - [x] ICE Coffee C pelo Yahoo Finance, ignorando o pregão em andamento
+  - [x] NASA POWER nas 3 regiões, descartando dias ainda não publicados
+- [x] Janela de coleta (`start_date`/`end_date`) nos dois modos
+- [x] `tests/test_agrobr_real.py` e `tests/test_cepea_series.py`, com os downloads substituídos por dados fixos
 
-## Critérios de aceite do documento
+> **O que causava o `MemoryError` da B3**: `agrobr.b3.historico` dispara o download de todos os pregões da janela ao mesmo tempo, e cada arquivo ocupa centenas de MB ao ser processado (medi ~1,2 GB de pico com 4 simultâneos). O cliente baixa em lotes de 20 dias, 2 por vez (pico de memória em torno de 600 MB), e grava o resultado em cache a cada lote.
+>
+> **Decisões que valem revisão**:
+> - 1º vencimento = o contrato de vencimento mais próximo em cada pregão, como no script legado. Perto do vencimento esse contrato perde liquidez; uma regra de rolagem pode ser melhor.
+> - O arquivo de ajustes do dia D traz uma linha datada do pregão seguinte que só repete o ajuste de D; ela é descartada.
+> - Um dia útil sem arquivo só é marcado como feriado no cache depois de 5 dias; antes disso é tentado de novo a cada coleta.
+> - Se o complemento recente do CEPEA falhar, a coleta segue só com o CSV. Qualquer outra fonte indisponível ou vazia derruba a coleta.
+> - O download automático da série do CEPEA (`CEPEA_AUTO_DOWNLOAD`) vem desligado: o site o recusou com HTTP 403 em 07/10/2026. O caminho suportado é baixar a planilha pelo navegador e usar `--importar`.
+> - O `id` da série do robusta (`24`) em `src/cepea_series.py` nunca foi confirmado, e só importa para o download automático. A importação reconhece a série pelo título.
+> - O leitor da planilha foi escrito a partir do script legado e conferido com as duas planilhas reais do CEPEA em 07/10/2026: os preços das datas em comum com os CSVs anteriores coincidiram exatamente.
+> - `usd_brl_compra` e as variáveis DROP do legado (Selic, IPCA, COT, DXY, Brent, ONI) não são coletadas.
+
+## Observações operacionais## Critérios de aceite do documento
 
 Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementado, verificação depende de PostgreSQL · ❌ não atendido.
 
@@ -194,7 +210,7 @@ Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementad
 | PostgreSQL sobe localmente | 🟡 | `docker-compose.yml` |
 | Migrations criam tudo | 🟡 | `src/migrator.py`, `test_schema.py` |
 | SQLite migra para base de teste | 🟡 | `src/sqlite_migrator.py`, `test_sqlite_migration.py` |
-| Pipeline baixa ou simula Agro.br | 🟡 | simula; o modo real não existe (`RealAgrobrClient` falha de propósito) |
+| Pipeline baixa ou simula Agro.br | ✅ | os dois modos; a coleta real foi executada contra as seis fontes e é coberta por `test_agrobr_real.py` |
 | Mesma carga roda 2× sem duplicidade | 🟡 | `test_idempotency.py`; ressalva: `src.sqlite_migrator` duplica `raw` se rodar 2× |
 | Variáveis geradas com nomes/tipos documentados | ✅ | `docs/data_dictionary.md`, `test_feature_catalog.py` |
 | Excluídas fora da consulta padrão | ✅ | `test_feature_catalog.py` (15) |
@@ -211,7 +227,11 @@ Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementad
 
 ### Pendências fora das etapas
 
-- **Modo real de coleta**: depende de URLs, credenciais e exemplos de resposta de cada fonte.
+- **Histórico do CEPEA**: atualizado em 07/10/2026 pelas planilhas do site, importadas com `python -m src.cepea_series --importar` — arábica de 02/09/1996 a 06/10/2026 (7.495 cotações) e robusta de 08/11/2001 a 06/10/2026 (6.161). Precisa ser repetido periodicamente; a coleta avisa quando abrir um buraco.
+- **Acesso automático ao CEPEA**: recusado pelo site (HTTP 403 em 07/10/2026; o `robots.txt` de 03/09/2026 declara o bloqueio de acesso automatizado). Se for necessário, depende de autorização do CEPEA. O complemento recente via `agrobr` também depende do site e pode passar a falhar; nesse caso a coleta segue só com o CSV.
+- **Primeira carga real**: 9 anos de ajustes da B3 levam mais de 2 horas; ainda não foi feita.
+- **Bancos separados para simulado e real**: nada impede hoje uma ingestão simulada de gravar por cima de dados reais.
+- **Job de pós-fechamento e a B3**: às 19:00 o arquivo de ajustes do dia pode ainda não estar publicado; a versão gerada repete o ajuste da véspera para aquele dia.
 - **Janela histórica**: 9 anos contra ~1.096 dias; decisão da equipe.
 - **Submódulo `base/`**: gitlink sem `.gitmodules`.
 - **Imutabilidade das versões no banco**: hoje garantida pelo código e conferível por checksum, sem trigger.

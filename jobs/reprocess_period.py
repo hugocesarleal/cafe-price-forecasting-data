@@ -7,7 +7,8 @@ dataset só ganha versão nova se o conteúdo mudar.
 
     python -m jobs.reprocess_period --start 2025-01-01 --end 2025-12-31
 
-A janela só é suportada com AGROBR_MODE=simulated.
+No modo real, os pregões da B3 já baixados vêm do cache em disco; para forçar
+um novo download deles, apague o cache antes.
 """
 
 import argparse

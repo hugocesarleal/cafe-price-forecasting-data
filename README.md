@@ -72,7 +72,9 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── logging_config.py        # Logging estruturado
 │   ├── migrator.py              # Executor de migrations versionadas
 │   ├── sqlite_migrator.py       # Migração SQLite legado → PostgreSQL
-│   ├── agrobr_client.py         # Adaptador Agro.br (modo real/simulado)
+│   ├── agrobr_client.py         # Contrato de coleta, fábrica e modo simulado
+│   ├── agrobr_real.py           # Modo real: CEPEA, BCB, B3 e NASA via agrobr; ICE via Yahoo
+│   ├── cepea_series.py          # Importa a planilha da série do CEPEA para os CSVs
 │   ├── validation.py            # 12 checagens de qualidade e limites físicos
 │   ├── ingestion.py             # Pipeline raw → staging → core (15 passos)
 │   ├── transformations.py       # Transformações causais (janelas, defasagens, alvos)
@@ -132,7 +134,10 @@ Parâmetros críticos do `.env`:
 | `JOB_MAX_RETRIES` | `2` | Novas tentativas de um job após erro inesperado |
 | `HISTORICAL_YEARS` | `9` | Janela histórica em anos |
 | `MAX_PRUNE_YEARS` | `2` | Teto de poda lógica |
-| `AGROBR_MODE` | `simulated` | `real` ou `simulated` |
+| `AGROBR_MODE` | `simulated` | `real` (fontes de verdade) ou `simulated` (só para testar o pipeline) |
+| `CEPEA_AUTO_DOWNLOAD` | `false` | Tenta baixar a série do CEPEA a cada coleta real; o site recusa hoje (403) |
+| `COLLECTION_CACHE_DIR` | `.cache/coleta` | Cache em disco da coleta real (ajustes da B3) |
+| `COLLECTION_WINDOW_DAYS` | `0` | Dias recoletados pelos jobs agendados; `0` = janela inteira |
 | `CONFIRM_HISTORICAL_WINDOW` | `true` | Trava obrigatória em produção |
 
 ### 3. Criar o banco e aplicar migrations
@@ -153,6 +158,8 @@ python -m src.sqlite_migrator
 
 ### 5. Executar a ingestão
 
+Com `AGROBR_MODE=real`, a primeira execução baixa todo o histórico da B3 e leva horas (veja [Fontes de Dados](#fontes-de-dados)). Para começar com uma janela menor, use `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD`.
+
 ```bash
 python -m src.ingestion
 ```
@@ -171,6 +178,7 @@ Comportamentos que valem atenção:
 | Checagem de **ALERTA** reprovada | Registrada em `audit.data_quality_checks`, mas não bloqueia |
 | Outra execução em andamento | `pg_try_advisory_lock` nega; execução termina `BLOCKED` sem tocar nos dados |
 | Falha de coleta | Novas tentativas com espera exponencial até `AGROBR_MAX_RETRIES`; só `SourceFetchError` é repetida |
+| Fonte sem nenhum dado na janela (modo real) | Coleta falha em vez de publicar uma variável vazia |
 
 Para reprocessar uma janela específica, use a API Python:
 
@@ -178,7 +186,7 @@ Para reprocessar uma janela específica, use a API Python:
 from datetime import date
 from src.ingestion import run_ingestion
 
-# start_date/end_date valem para AGROBR_MODE=simulated, que é quem aceita janela.
+# start_date/end_date restringem a janela coletada, nos dois modos.
 run_ingestion(cutoff_date=date(2026, 1, 1), start_date=date(2025, 1, 1))
 ```
 
@@ -244,6 +252,8 @@ Cada job executa o ciclo completo — ingestão, features e versão do dataset �
 | `python -m jobs.run_on_demand [--cutoff AAAA-MM-DD] [--force]` | manual | o último dia com preço, ou o informado |
 | `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD` | manual | recoleta a janela e reconstrói o dataset |
 
+Por padrão os jobs agendados recoletam a janela histórica inteira a cada execução, e `raw` (que só acumula) recebe todas essas linhas de novo. Depois da primeira carga, defina `COLLECTION_WINDOW_DAYS` (por exemplo `45`) para que eles recoletem só os dias recentes.
+
 Sem opções, um job roda uma vez e termina — é a forma de usar com cron ou com o Agendador de Tarefas do Windows. Com `--schedule` ele fica em execução e dispara todos os dias no horário configurado, no fuso `TIMEZONE`:
 
 ```bash
@@ -283,28 +293,36 @@ A poda é lógica: marca `is_pruned = TRUE` nas linhas mais antigas de `features
 python -m pytest tests/ -v
 ```
 
-Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py`, `test_jobs.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py`, `test_jobs.py`, `test_agrobr_real.py`, `test_cepea_series.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
 
 ---
 
 ## Fontes de Dados
 
-| Variável | Fonte | Frequência |
+O modo de coleta é escolhido por `AGROBR_MODE`.
+
+### Modo real (`AGROBR_MODE=real`)
+
+| Variável | Fonte | Como é coletada |
 |---|---|---|
-| Preço arábica (alvo) | CEPEA/ESALQ — arquivo manual | Diária (pregão) |
-| Preço robusta | CEPEA/ESALQ | Diária |
-| Câmbio USD/BRL | BCB PTAX — API | Diária útil |
-| Selic | BCB SGS — API | Diária |
-| Futuros café ICE KC | Yahoo Finance / B3 | Diária |
-| Clima 3 regiões | NASA POWER — API | Diária |
-| El Niño (ONI) | NOAA CPC — arquivo | Mensal |
-| Posição de fundos | CFTC — API | Semanal |
+| `preco_arabica` (alvo), `preco_robusta` | CEPEA/ESALQ | CSVs em `base/dados_manuais/`, atualizados a partir da planilha do site, + `agrobr` para os dias recentes |
+| `usd_brl` | BCB PTAX (venda) | `agrobr` |
+| `b3_cafe_ajuste` | B3, contrato ICF, 1º vencimento | `agrobr`, um arquivo por pregão, com cache em disco |
+| `ice_kc` | ICE US Coffee C (`KC=F`), fechamento | Yahoo Finance (`yfinance`) |
+| Clima, 7 séries × 3 regiões | NASA POWER | `agrobr`, um ponto por região (Bambuí, Varginha, Patrocínio) |
 
-### Por que o preço do café não é coletado automaticamente
+O que é preciso saber para operar:
 
-O CEPEA não oferece API com histórico. A coleta automática via `agrobr` só retorna os últimos ~60 dias (página estática). O histórico completo vem do **download manual** do CEPEA e os arquivos ficam em `base/dados_manuais/`. O `agrobr` complementa apenas os dias mais recentes.
+- **O CEPEA exige um passo manual periódico.** O histórico vem dos CSVs de `base/dados_manuais/`; o `agrobr` só enxerga as cotações recentes, então um CSV velho deixa um buraco entre os dois, avisado no log. Para atualizar: baixe pelo navegador a planilha "Série histórica" de cada indicador e rode `python -m src.cepea_series --importar arquivo1.xls arquivo2.xls`. O comando reconhece a série pelo título, confere que é a mesma do CSV atual (cobertura e preços coincidentes) e guarda o anterior como `.bak`. O download automático existe (`CEPEA_AUTO_DOWNLOAD=true`, ou `python -m src.cepea_series`), mas o site o recusa com HTTP 403, então vem desligado.
+- **A primeira coleta da B3 é lenta.** Cada pregão é um arquivo de ~11 MB com o mercado inteiro: cerca de 4 segundos por dia, ou seja, **mais de 2 horas para 9 anos**. Os dias baixados ficam em `COLLECTION_CACHE_DIR`, então isso acontece uma vez; uma coleta interrompida continua de onde parou, e a rotina diária baixa só o pregão novo.
+- **O clima chega com atraso.** O NASA POWER publica cerca de 3 dias depois (5 para radiação). As features usam o clima com esse mesmo atraso, para que o treino veja o que a previsão terá.
+- **Licenças.** CEPEA/ESALQ é CC BY-NC 4.0 (uso não comercial, com citação). B3 e Yahoo Finance não têm termos claros para acesso programático; para uso comercial, confirme antes.
 
----
+### Modo simulado (`AGROBR_MODE=simulated`)
+
+Serve para desenvolver e testar o pipeline sem rede. **Não serve para treinar modelo**: só os preços do CEPEA (lidos dos mesmos CSVs) são reais. Câmbio, ICE e B3 são derivados das duas colunas de preço do CSV do arábica, e o clima é gerado por fórmula.
+
+> **Não misture os dois modos no mesmo banco.** A publicação em `core` é por upsert: uma ingestão simulada grava por cima de câmbio, futuros e clima reais das mesmas datas, e um banco que já recebeu dados simulados fica com eles onde a coleta real não tiver valor. Use bancos separados.
 
 ## Variáveis do Modelo
 
@@ -336,7 +354,7 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 
 | Garantia | Como é implementada |
 |---|---|
-| **Sem data leakage** | Nada posterior ao corte é lido; janelas fechadas em $t$; preenchimento só para frente e com limite; `preco_arabica` do dia nunca é feature; fontes com atraso deslocadas por `PUBLICATION_LAG_DAYS` |
+| **Sem data leakage** | Nada posterior ao corte é lido; janelas fechadas em $t$; preenchimento só para frente e com limite; `preco_arabica` do dia nunca é feature; clima deslocado pelo atraso de publicação do NASA POWER (`PUBLICATION_LAG_DAYS`: 3 dias, 5 para radiação) |
 | **Imutabilidade do raw** | `raw.market_observations` e `raw.weather_observations` nunca têm linhas deletadas |
 | **Idempotência** | Upsert com `ON CONFLICT … DO UPDATE SET col = COALESCE(excluded.col, atual)` |
 | **Sem concorrência** | `pg_try_advisory_lock` impede duas instâncias simultâneas |
@@ -356,15 +374,17 @@ python -m pytest tests/ -v --tb=short
 | `test_schema.py` | 3 | Schemas, tabelas obrigatórias e seed do catálogo |
 | `test_sqlite_migration.py` | 8 | Migração legado, paridade de contagem, spot-check de valor, idempotência |
 | `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
+| `test_cepea_series.py` | 30 | Leitura da planilha do CEPEA (datas dd/mm, números pt-BR), conferência contra o CSV existente, gravação com `.bak`, falhas que não tocam no arquivo |
+| `test_agrobr_real.py` | 31 | Coleta real com downloads substituídos: junção CEPEA manual + recente, PTAX, 1º vencimento da B3, cache e retomada, pregão em andamento da ICE, clima não publicado, falhas de rede (1 teste contra as fontes de verdade, desligado por padrão) |
 | `test_ingestion.py` | 19 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10), lock concorrente (11), retomada após falha no meio da carga e `force` |
 | `test_idempotency.py` | 9 | Carga repetida não duplica (3), deduplicação dentro e entre origens (4), upsert sem duplicar datas e com `COALESCE` (5) |
 | `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
-| `test_no_future_leakage.py` | 9 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
+| `test_no_future_leakage.py` | 10 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
 | `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
 | `test_dataset_versioning.py` | 20 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20) |
 | `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
 | `test_pipeline.py` | 8 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado e lock |
-| `test_jobs.py` | 33 | Horários e fuso, dia de corte de cada job, novas tentativas, agendador, códigos de saída e argumentos |
+| `test_jobs.py` | 34 | Horários e fuso, dia de corte de cada job, novas tentativas, agendador, códigos de saída e argumentos |
 | `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
 
 Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; os 20 estão implementados.

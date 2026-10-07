@@ -62,6 +62,17 @@ def next_run_at(agora: datetime, horario: str) -> datetime:
     return alvo
 
 
+def collection_window(cutoff_date: Optional[date]) -> Dict[str, date]:
+    """Janela de coleta dos jobs agendados, conforme ``COLLECTION_WINDOW_DAYS``.
+
+    Vazio (coleta a janela histórica inteira) quando a configuração é 0.
+    """
+    dias = settings.COLLECTION_WINDOW_DAYS
+    if dias <= 0 or cutoff_date is None:
+        return {}
+    return {"start_date": cutoff_date - timedelta(days=dias)}
+
+
 # ---------------------------------------------------------------------------
 # Execução com novas tentativas
 # ---------------------------------------------------------------------------
@@ -166,7 +177,8 @@ def scheduled_job_main(
 
     def executar() -> Dict[str, Any]:
         # O corte é resolvido a cada execução: no modo agendado o dia muda.
-        resultado = run_job(job_name, cutoff_date=args.cutoff or cutoff())
+        dia = args.cutoff or cutoff()
+        resultado = run_job(job_name, cutoff_date=dia, **collection_window(dia))
         print(json.dumps(resultado, ensure_ascii=False, indent=2, default=str))
         return resultado
 

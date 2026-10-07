@@ -25,6 +25,9 @@ pip-selfcheck.json
 *.sqlite
 *.sqlite3
 
+# Cache da coleta real (ajustes diários da B3)
+.cache/
+
 # Cluster PostgreSQL temporário de testes (criado por initdb)
 pg_test_cluster/
 pg_test.log

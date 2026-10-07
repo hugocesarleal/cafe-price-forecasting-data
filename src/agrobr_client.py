@@ -5,10 +5,9 @@ Duas estratégias, conforme a especificação:
 * ``SimulatedAgrobrClient`` — usa os CSVs locais de ``base/dados_manuais`` para
   preços e gera clima/futuros sintéticos determinísticos. Serve para desenvolver
   e testar o pipeline de ponta a ponta sem depender de rede.
-* ``RealAgrobrClient`` — coleta real. A estrutura das APIs (Agro.br, CEPEA/ESALQ,
-  BCB PTAX, NASA POWER, B3 e ICE US) não foi fornecida, então nenhum endpoint,
-  contrato de resposta ou parser foi inventado: a classe falha alto explicando o
-  que é necessário para implementá-la.
+* ``RealAgrobrClient`` (em ``src/agrobr_real.py``) — coleta real: CEPEA/ESALQ,
+  BCB PTAX, B3 e NASA POWER pela biblioteca ``agrobr`` e ICE US pelo Yahoo
+  Finance.
 
 Toda observação devolvida usa o formato longo de ``raw.market_observations`` e
 ``raw.weather_observations``: uma linha por (data, região, variável).
@@ -19,7 +18,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import math
-import os
 import random
 import subprocess
 from abc import ABC, abstractmethod
@@ -211,6 +209,43 @@ def _weather_row(obs_date: date, region: str, variable: str, value: float, sourc
     }
 
 
+def read_price_csv(
+    path: Path,
+    variable: str,
+    start_date: date,
+    end_date: date,
+    source: str,
+) -> Tuple[List[Dict], str]:
+    """Lê um CSV de preços do CEPEA e devolve as linhas da janela e o hash do arquivo."""
+    if not path.is_file():
+        raise SourceFetchError(f"CSV de preços não encontrado: {path}")
+
+    with open(path, "rb") as fh:
+        raw_bytes = fh.read()
+
+    reader = csv.DictReader(raw_bytes.decode("utf-8-sig").splitlines())
+    faltantes = [c for c in CSV_PRECO_COLUNAS if c not in (reader.fieldnames or [])]
+    if faltantes:
+        raise SourceFetchError(
+            f"Colunas ausentes em {path.name}: {faltantes}. "
+            f"Esperado: {list(CSV_PRECO_COLUNAS)}."
+        )
+
+    rows: List[Dict] = []
+    for record in reader:
+        obs_date = _parse_date(record.get("data"))
+        if obs_date is None or not (start_date <= obs_date <= end_date):
+            continue
+        brl = _to_float(record.get("preco_brl_saca"))
+        if brl is None or brl <= 0:
+            continue
+        rows.append(_market_row(obs_date, variable, brl, source))
+
+    rows.sort(key=lambda r: r["observation_date"])
+    logger.info("%s: %d observações de %s na janela.", path.name, len(rows), variable)
+    return rows, _hash_bytes(raw_bytes)
+
+
 # ---------------------------------------------------------------------------
 # Contrato
 # ---------------------------------------------------------------------------
@@ -265,35 +300,8 @@ class SimulatedAgrobrClient(AgrobrClient):
     # -- preços CEPEA -------------------------------------------------------
 
     def _read_price_csv(self, file_name: str, variable: str) -> Tuple[List[Dict], str]:
-        path = self.manual_dir / file_name
-        if not path.is_file():
-            raise SourceFetchError(f"CSV de preços não encontrado: {path}")
-
-        rows: List[Dict] = []
-        with open(path, "rb") as fh:
-            raw_bytes = fh.read()
-
-        text = raw_bytes.decode("utf-8-sig")
-        reader = csv.DictReader(text.splitlines())
-        faltantes = [c for c in CSV_PRECO_COLUNAS if c not in (reader.fieldnames or [])]
-        if faltantes:
-            raise SourceFetchError(
-                f"Colunas ausentes em {file_name}: {faltantes}. "
-                f"Esperado: {list(CSV_PRECO_COLUNAS)}."
-            )
-
-        for record in reader:
-            obs_date = _parse_date(record.get("data"))
-            if obs_date is None or not (self.start_date <= obs_date <= self.end_date):
-                continue
-            brl = _to_float(record.get("preco_brl_saca"))
-            if brl is None or brl <= 0:
-                continue
-            rows.append(_market_row(obs_date, variable, brl, "CEPEA/ESALQ-SIM"))
-
-        rows.sort(key=lambda r: r["observation_date"])
-        logger.info("%s: %d observações de %s na janela.", file_name, len(rows), variable)
-        return rows, _hash_bytes(raw_bytes)
+        return read_price_csv(self.manual_dir / file_name, variable,
+                              self.start_date, self.end_date, "CEPEA/ESALQ-SIM")
 
     def _derive_fx_and_futures(self, arabica_rows: List[Dict]) -> Dict[str, List[Dict]]:
         """Deriva câmbio e futuros a partir das duas colunas de preço do CSV.
@@ -467,42 +475,6 @@ class SimulatedAgrobrClient(AgrobrClient):
 
 
 # ---------------------------------------------------------------------------
-# Modo real
-# ---------------------------------------------------------------------------
-
-class RealAgrobrClient(AgrobrClient):
-    """Coleta real — ainda não implementável de forma honesta.
-
-    A especificação proíbe gerar código fictício para a estrutura real do
-    Agro.br. Os endpoints, o formato de resposta, a autenticação e a periodicidade
-    de cada fonte (CEPEA/ESALQ, BCB PTAX, NASA POWER, B3 e ICE US) não foram
-    fornecidos, então esta classe mantém apenas a configuração e falha alto.
-    """
-
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout_seconds: Optional[int] = None,
-    ) -> None:
-        self.base_url = base_url or os.environ.get("AGROBR_BASE_URL")
-        # Credencial vem sempre de variável de ambiente, nunca do código.
-        self.api_key = api_key or os.environ.get("AGROBR_API_KEY")
-        self.timeout_seconds = timeout_seconds or settings.AGROBR_TIMEOUT_SECONDS
-
-    def _fetch(self) -> List[SourceFile]:
-        raise NotImplementedError(
-            "Modo real indisponível. Para implementá-lo é preciso, nesta ordem: "
-            "(1) URLs oficiais e credenciais de Agro.br/CEPEA/BCB/NASA POWER/B3/ICE; "
-            "(2) um exemplo real de resposta de cada endpoint (JSON/CSV/XML); "
-            "(3) a periodicidade e o horário de publicação de cada fonte. "
-            "Com isso, cada fonte vira um SourceFile com content_hash do payload "
-            "original. Enquanto a estrutura real for desconhecida, use "
-            "AGROBR_MODE=simulated."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Fábrica
 # ---------------------------------------------------------------------------
 
@@ -512,6 +484,8 @@ def get_agrobr_client(mode: Optional[str] = None, **kwargs) -> AgrobrClient:
     if modo in ("simulated", "simulado", "simulate"):
         return SimulatedAgrobrClient(**kwargs)
     if modo in ("real", "production", "producao"):
+        # Importado aqui para que o modo simulado não dependa do agrobr.
+        from src.agrobr_real import RealAgrobrClient
         return RealAgrobrClient(**kwargs)
     raise ValueError(
         f"AGROBR_MODE inválido: {mode!r}. Use 'simulated' ou 'real'."

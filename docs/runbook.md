@@ -216,8 +216,6 @@ Recoleta a janela ignorando a checagem de "origem inalterada" e reconstrói o da
 
 Um valor que precisa ser **apagado** de `core` (e não substituído) não sai por reprocessamento, por causa do `COALESCE` do upsert. Isso exige intervenção manual no banco.
 
-A janela só funciona com `AGROBR_MODE=simulated`.
-
 ### Tudo, forçando
 
 ```bash
@@ -230,7 +228,7 @@ python -m jobs.run_on_demand --force
 python -m jobs.run_on_demand --cutoff 2026-09-30
 ```
 
-Gera uma versão cujo último dia é o informado. Dados posteriores a ele presentes na coleta reprovam a ingestão; em modo simulado a coleta já é limitada ao corte.
+Gera uma versão cujo último dia é o informado. A coleta é limitada a esse dia; se ainda assim vier dado posterior a ele, a ingestão é reprovada.
 
 ---
 
@@ -259,15 +257,59 @@ A poda vale para a versão em que foi aplicada. Uma versão nova nasce com a jan
 
 ## 6. Implantação e manutenção
 
-### Banco novo
+### Banco novo, com dados reais
 
 ```bash
+pip install -r requirements.txt   # inclui agrobr e yfinance
 python -m src.migrator            # schemas, tabelas, índices, funções, triggers, catálogo
-python -m src.sqlite_migrator     # opcional: traz a base legada do SQLite
+```
+
+No `.env`, defina `AGROBR_MODE=real`. Então:
+
+```bash
 python -m jobs.run_on_demand      # primeira carga e primeira versão
 ```
 
-`src.sqlite_migrator` grava em `raw` a cada execução. Rodá-lo duas vezes duplica as linhas legadas em `raw`; `core` não duplica.
+A primeira carga baixa um arquivo da B3 por pregão: cerca de 4 segundos cada, **mais de 2 horas para os 9 anos**. O log mostra o progresso a cada 20 pregões. Pode interromper: o que já foi baixado está em `COLLECTION_CACHE_DIR` (`.cache/coleta/b3_icf_ajustes.csv`) e a execução seguinte continua dali. As outras fontes levam cerca de um minuto.
+
+Para começar com menos histórico e completar depois:
+
+```bash
+python -m jobs.reprocess_period --start 2024-01-01 --end 2026-10-06
+```
+
+Depois da primeira carga, defina `COLLECTION_WINDOW_DAYS=45` no `.env`. Sem isso, cada job recoleta os 9 anos e grava tudo de novo em `raw`. Com a janela curta, uma revisão da fonte mais antiga que 45 dias só entra por `jobs.reprocess_period`.
+
+> **Use bancos separados para os modos simulado e real.** A publicação em `core` é por upsert, então uma ingestão simulada grava por cima dos dados reais das mesmas datas, e um banco que já recebeu dados simulados continua com eles onde a coleta real não tiver valor (os últimos dias de clima, por exemplo). Nada no código impede a mistura.
+
+`src.sqlite_migrator` (base legada do SQLite) não é necessário no modo real: a coleta cobre o mesmo período e mais. Se usá-lo, rode uma vez só — ele grava em `raw` a cada execução e duplica as linhas legadas.
+
+### Histórico do CEPEA
+
+Os preços do arábica e do robusta vêm dos CSVs de `base/dados_manuais/`, e o `agrobr` completa só as cotações mais recentes. Quando o log da coleta avisar de um *buraco entre o CSV manual e o agrobr*, os CSVs precisam ser atualizados:
+
+1. Na página do indicador de café do CEPEA, baixe pelo navegador a planilha "Série histórica" do arábica e a do robusta.
+2. Importe as duas (o nome dos arquivos não importa; a série é reconhecida pelo título da planilha):
+
+   ```bash
+   python -m src.cepea_series --importar caminho/arabica.xls caminho/robusta.xls
+   ```
+
+3. Rode `python -m jobs.run_on_demand`.
+
+Acrescente `--check` para só conferir, sem gravar. Um CSV só é substituído se a planilha for claramente a mesma série, mais atual: o título cita o indicador certo, ela não é menor que o arquivo existente, não termina antes dele e os preços das datas em comum coincidem. O arquivo anterior fica ao lado, como `.csv.bak`. Se alguma conferência falhar, nada é gravado e a mensagem diz qual.
+
+Enquanto o buraco existir, os dias sem preço ficam sem alvo e, passados 6 dias, sem `preco_robusta` nas features.
+
+**Por que não é automático.** O código para baixar a planilha existe (`python -m src.cepea_series`, ou `CEPEA_AUTO_DOWNLOAD=true` para a coleta tentar sozinha), mas em 07/10/2026 o site respondeu HTTP 403 ao download feito pelo programa. O `robots.txt` do CEPEA, de 03/09/2026, declara a intenção de barrar acesso automatizado e de reforçar isso no firewall. Não contorne o bloqueio trocando a identificação do programa: se o acesso automático for necessário, o caminho é pedir autorização ao CEPEA. Com a opção ligada e o site recusando, a coleta registra um aviso e segue com o CSV existente.
+
+Os dados do CEPEA são CC BY-NC 4.0 (uso não comercial, com citação).
+
+### Uma fonte está fora do ar
+
+A coleta falha inteira (exceto pelo complemento recente do CEPEA, que cai para o CSV manual com um aviso). O job repete sozinho; se a fonte continuar indisponível, termina `FAILED` e a última versão do dataset segue valendo. Não há modo degradado que publique sem uma das fontes, porque isso entregaria ao modelo uma variável vazia.
+
+O cache da B3 pode ser apagado a qualquer momento (`.cache/coleta/`); o custo é baixar tudo de novo.
 
 ### Mudar o catálogo de variáveis
 
@@ -280,7 +322,9 @@ Sem isso, a construção do dataset para com erro explícito em vez de publicar 
 
 ### Atraso de publicação das fontes
 
-`PUBLICATION_LAG_DAYS`, em `src/feature_builder.py`, está vazio: assume-se que tudo de um dia está disponível no fechamento dele. Uma fonte que só publica em `t+2` deve entrar ali, para não aparecer nas features antes de existir.
+`PUBLICATION_LAG_DAYS`, em `src/feature_builder.py`, diz quantos dias cada série leva para ser publicada. Hoje: 3 dias para o clima e 5 para a radiação (NASA POWER); mercado sem atraso. A linha de `t` usa o clima de `t-3`, que é o que existe quando ela é montada em produção.
+
+Se a latência da fonte mudar, ajuste ali. Atraso configurado menor que o real faz a última linha de cada versão sair com clima mais velho do que o usado no treino; maior que o real só desperdiça informação.
 
 ### Testes
 
@@ -294,8 +338,11 @@ Exigem PostgreSQL acessível. Os dados de teste ficam em 1990, sob o job `teste_
 
 ## 7. Limitações conhecidas
 
-- **Modo real não implementado.** `AGROBR_MODE=real` falha com `NotImplementedError`. Em modo simulado só os preços do CEPEA são reais; câmbio e futuros são derivados deles e o clima é sintético.
-- **Clima sintético é regravado em `raw` todo dia** em modo simulado, porque a janela termina no dia do corte e o hash muda.
+- **Modo simulado não serve para treino.** Nele só os preços do CEPEA são reais; câmbio e futuros são derivados deles e o clima é sintético.
+- **Nada impede misturar simulado e real no mesmo banco** (ver seção 6).
+- **O histórico inteiro é regravado em `raw` a cada job**, a menos que `COLLECTION_WINDOW_DAYS` esteja definido.
+- **O job de pós-fechamento pode rodar antes de a B3 publicar os ajustes do dia.** Nesse caso a versão repete, para aquele dia, o ajuste da véspera. O job diário das 00:00 não tem esse problema.
+- **1º vencimento da B3 sem regra de rolagem.** Usa-se o contrato mais próximo até ele vencer.
 - **Imutabilidade das versões não é imposta pelo banco.** Nada no código reescreve uma versão e `verify_dataset_version` detecta alteração, mas um `UPDATE` manual não é barrado.
 - **`raw` só cresce.** Não há rotina de expurgo, por definição do escopo.
 - **`audit.pending_events` não tem consumidor** neste repositório.
