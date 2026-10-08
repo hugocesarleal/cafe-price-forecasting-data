@@ -82,16 +82,20 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── dataset_versioning.py    # Versões imutáveis do dataset, com checksum
 │   ├── model_contract.py        # Contrato com o modelo: consumo e registro de previsões
 │   ├── pipeline.py              # Orquestrador: ingestão → features → versão
-│   └── pruning.py               # Poda lógica da janela histórica (máx. 2 anos)
+│   ├── pruning.py               # Poda lógica da janela histórica (máx. 2 anos)
+│   └── integrations/
+│       └── django.py            # Adaptador de fronteira para Django/Celery (caixa preta)
 │
 ├── tests/                       # Suite pytest (20 casos obrigatórios)
 ├── jobs/                        # Jobs agendáveis e manuais
-│   ├── runner.py                # Novas tentativas, agendamento e linha de comando
+│   ├── runner.py                # Linha de comando, corte e novas tentativas
+│   ├── apscheduler_runner.py    # Agendador diário (APScheduler) do modo --schedule
 │   ├── update_daily.py          # 00:00 — fecha o dia anterior
 │   ├── update_after_close.py    # Pós-fechamento — fecha o próprio dia
 │   ├── update_before_open.py    # Pré-abertura — revisa o dia anterior
 │   ├── run_on_demand.py         # Execução sob demanda
 │   └── reprocess_period.py      # Reprocessamento manual de um período
+├── examples/                    # Exemplos de integração (Django: command, task Celery, Admin)
 ├── docs/                        # Arquitetura, dicionário de dados, contrato ML, runbook
 │
 ├── .env.example                 # Template de variáveis de ambiente
@@ -128,10 +132,15 @@ Parâmetros críticos do `.env`:
 | `DB_HOST` | `127.0.0.1` | Host do PostgreSQL |
 | `DB_PORT` | `5433` | Porta (o `.env.example` e o `docker-compose.yml` usam `5432`) |
 | `DB_NAME` | `cafe_previsao` | Nome do banco |
+| `PIPELINE_DATABASE_URL` | (vazio) | URL completa do banco do pipeline; vence `DB_*` na conexão do pipeline |
+| `ADVISORY_LOCK_KEY` | `84729103` | Chave do advisory lock que serializa os ciclos no PostgreSQL |
 | `UPDATE_TIME` | `00:00` | Horário do job diário (fuso `TIMEZONE`) |
 | `AFTER_CLOSE_TIME` | `19:00` | Horário do job de pós-fechamento |
 | `BEFORE_OPEN_TIME` | `08:00` | Horário do job de pré-abertura |
 | `JOB_MAX_RETRIES` | `2` | Novas tentativas de um job após erro inesperado |
+| `SCHEDULER_ENABLED` | `true` | Liga/desliga o agendador embutido (`--schedule`) |
+| `SCHEDULER_JOB_ID` | (nome do job) | Id estável do job no agendador; só com um job por processo |
+| `MISFIRE_GRACE_SECONDS` | `3600` | Tolerância para um disparo atrasado ainda rodar uma vez |
 | `HISTORICAL_YEARS` | `9` | Janela histórica em anos |
 | `MAX_PRUNE_YEARS` | `2` | Teto de poda lógica |
 | `AGROBR_MODE` | `simulated` | `real` (fontes de verdade) ou `simulated` (só para testar o pipeline) |
@@ -257,8 +266,11 @@ Por padrão os jobs agendados recoletam a janela histórica inteira a cada execu
 Sem opções, um job roda uma vez e termina — é a forma de usar com cron ou com o Agendador de Tarefas do Windows. Com `--schedule` ele fica em execução e dispara todos os dias no horário configurado, no fuso `TIMEZONE`:
 
 ```bash
-python -m jobs.update_daily --schedule
+python -m jobs.update_daily --schedule                 # agendador embutido (APScheduler)
+python -m jobs.update_daily --schedule --cutoff 2026-09-30   # fixa o dia de todas as execuções
 ```
+
+O agendador embutido é o APScheduler (`jobs/apscheduler_runner.py`): um `CronTrigger` diário no fuso `TIMEZONE`, com `coalesce=True` e `max_instances=1` (nada se acumula nem se sobrepõe), tolerância a atraso `MISFIRE_GRACE_SECONDS` (dentro dela o disparo atrasado ainda roda uma vez; além dela fica registrado como perdido e o próximo horário normal assume), id estável (`SCHEDULER_JOB_ID` ou o nome do job — reiniciar não duplica) e encerramento controlado por SIGTERM/SIGINT, esperando a execução em curso. `SCHEDULER_ENABLED=false` desliga o agendamento sem erro. O pacote `apscheduler` só é exigido pelo modo `--schedule`; execução única e cron não dependem dele.
 
 O código de saída é `0` (SUCCESS), `1` (FAILED) ou `2` (BLOCKED: outro job está rodando).
 
@@ -277,7 +289,23 @@ ORDER BY started_at DESC
 LIMIT 10;
 ```
 
-### 10. Podar a janela histórica
+### 10. Integrar com Django (opcional)
+
+O pipeline é uma **biblioteca externa**: o Django não ganha regra de negócio, não reimplementa o banco em ORM e não duplica o esquema. A fronteira é `src/integrations/django.py`, que monta a configuração canônica, abre a **própria** conexão psycopg do ciclo (o advisory lock nunca usa a conexão gerenciada pelo ciclo de requests do Django) e devolve o dicionário do ciclo (`run_id`, `status`, métricas):
+
+```python
+from src.integrations.django import run_pipeline_job, run_ingestion_job, run_dataset_job
+
+resultado = run_pipeline_job("pipeline_django")     # ciclo completo
+resultado = run_ingestion_job("pipeline_django")    # só ingestão
+resultado = run_dataset_job("pipeline_django")      # só construção do dataset
+```
+
+Precedência de configuração, por campo: **explícita do chamador > Django > ambiente/`.env`**. Divergência nunca passa em silêncio: campos de conexão e de retry são honrados com aviso registrando qual fonte venceu; qualquer outro campo divergente derruba a chamada com `PipelineConfigError`.
+
+Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `sql/` — não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
+
+### 11. Podar a janela histórica
 
 ```bash
 python -m src.pruning --days 365          # descarta o primeiro ano da última versão válida
@@ -287,13 +315,13 @@ python -m src.pruning --restore           # desfaz a poda
 
 A poda é lógica: marca `is_pruned = TRUE` nas linhas mais antigas de `features.model_features` e o consumidor deixa de recebê-las. Nada é apagado, e `raw` e `core` não são tocados. É recusada, sem alterar nada, se descartar mais de `MAX_PRUNE_YEARS` (730 dias, contando o que já foi podado na versão), se deixar menos de `DATASET_MIN_DAYS` dias ativos, ou sem `CONFIRM_HISTORICAL_WINDOW=true`.
 
-### 11. Executar os testes
+### 12. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py`, `test_jobs.py`, `test_agrobr_real.py`, `test_cepea_series.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py` e `test_model_contract.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
+Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_ingestao` como escopo: `tests/conftest.py` apaga o próprio rastro antes e depois de cada caso, então é seguro rodar contra um banco com cargas reais. `test_transformations.py`, `test_no_future_leakage.py`, `test_jobs.py`, `test_agrobr_real.py`, `test_cepea_series.py` e parte de `test_feature_catalog.py`, `test_dataset_versioning.py`, `test_model_contract.py`, `test_scheduler.py` e `test_django_integration.py` rodam em memória, sem banco. Os testes de versionamento e de previsões criam suas versões numa transação que nunca é confirmada, então nenhum outro consumidor do banco chega a vê-las.
 
 ---
 
@@ -383,8 +411,10 @@ python -m pytest tests/ -v --tb=short
 | `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
 | `test_dataset_versioning.py` | 20 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20) |
 | `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
-| `test_pipeline.py` | 8 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado e lock |
-| `test_jobs.py` | 34 | Horários e fuso, dia de corte de cada job, novas tentativas, agendador, códigos de saída e argumentos |
+| `test_pipeline.py` | 11 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado, lock e conexão única do ciclo |
+| `test_jobs.py` | 29 | Horários e fuso, dia de corte de cada job, novas tentativas, códigos de saída e argumentos |
+| `test_scheduler.py` | 20 | Agendador APScheduler: gatilhos e fuso, tolerância de atraso (misfire), `coalesce`/`max_instances`, reinício sem duplicar, lock como barreira, falha que não derruba o processo, encerramento controlado e ponte do modo `--schedule` |
+| `test_django_integration.py` | 17 | Adaptador Django: precedência de configuração (explícita > Django > ambiente), validação de campos, conexão própria do ciclo, tradução de erros e leitura do Admin |
 | `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
 
 Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; os 20 estão implementados.

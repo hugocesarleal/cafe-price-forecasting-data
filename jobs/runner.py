@@ -1,7 +1,9 @@
-"""Infraestrutura comum dos jobs: novas tentativas, agendamento e linha de comando.
+"""Infraestrutura comum dos jobs: novas tentativas, linha de comando e corte.
 
 Cada job é um módulo fino que diz qual dia está fechando e em que horário roda;
-o resto vive aqui.
+o resto vive aqui. Quem agenda de verdade é o APScheduler
+(``jobs/apscheduler_runner.py``), chamado pelo modo ``--schedule``; este módulo
+não guarda mais nenhuma regra de "quando rodar".
 
 Códigos de saída: 0 = SUCCESS, 1 = FAILED, 2 = BLOCKED (outra execução em
 andamento — não é erro, o trabalho está sendo feito por ela).
@@ -12,19 +14,16 @@ from __future__ import annotations
 import argparse
 import json
 import time as time_module
-from datetime import date, datetime, time, timedelta
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Sequence
 from zoneinfo import ZoneInfo
 
-from src.config import settings
+from src.config import parse_hhmm, settings
 from src.logging_config import logger
 from src.pipeline import STATUS_BLOCKED, STATUS_FAILED, STATUS_SUCCESS, run_pipeline
 
 EXIT_CODES = {STATUS_SUCCESS: 0, STATUS_FAILED: 1, STATUS_BLOCKED: 2}
-
-# Maior intervalo dormido de uma vez no modo agendado; mantém o processo
-# responsivo a mudanças de relógio.
-MAX_SLEEP_SECONDS = 60.0
 
 CutoffFn = Callable[[], Optional[date]]
 
@@ -43,23 +42,6 @@ def today_local() -> date:
 
 def yesterday_local() -> date:
     return today_local() - timedelta(days=1)
-
-
-def parse_hhmm(valor: str) -> time:
-    try:
-        horas, minutos = valor.strip().split(":")
-        return time(int(horas), int(minutos))
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(f"Horário inválido: {valor!r}. Use HH:MM.") from exc
-
-
-def next_run_at(agora: datetime, horario: str) -> datetime:
-    """Próxima ocorrência de ``horario`` (HH:MM) no fuso de ``agora``."""
-    alvo = datetime.combine(agora.date(), parse_hhmm(horario), tzinfo=agora.tzinfo)
-    if alvo <= agora:
-        alvo = datetime.combine(
-            agora.date() + timedelta(days=1), parse_hhmm(horario), tzinfo=agora.tzinfo)
-    return alvo
 
 
 def collection_window(cutoff_date: Optional[date]) -> Dict[str, date]:
@@ -118,36 +100,6 @@ def run_job(
 
 
 # ---------------------------------------------------------------------------
-# Agendamento
-# ---------------------------------------------------------------------------
-
-def run_scheduled(
-    executar: Callable[[], Dict[str, Any]],
-    horario: str,
-    now: Callable[[], datetime] = now_local,
-    sleep: Callable[[float], None] = time_module.sleep,
-    max_runs: Optional[int] = None,
-) -> int:
-    """Chama ``executar`` todos os dias em ``horario``; devolve quantas vezes rodou.
-
-    Uma execução com erro não derruba o agendador: fica registrada e a próxima
-    acontece no dia seguinte. ``max_runs`` existe para testes.
-    """
-    execucoes = 0
-    while max_runs is None or execucoes < max_runs:
-        proxima = next_run_at(now(), horario)
-        logger.info("Próxima execução agendada para %s.", proxima.isoformat())
-        while (falta := (proxima - now()).total_seconds()) > 0:
-            sleep(min(falta, MAX_SLEEP_SECONDS))
-        try:
-            executar()
-        except Exception as exc:  # o agendador precisa sobreviver a qualquer job
-            logger.error("Execução agendada falhou: %s", exc)
-        execucoes += 1
-    return execucoes
-
-
-# ---------------------------------------------------------------------------
 # Linha de comando
 # ---------------------------------------------------------------------------
 
@@ -165,24 +117,36 @@ def scheduled_job_main(
     horario: str,
     argv: Optional[Sequence[str]] = None,
 ) -> int:
-    """Ponto de entrada dos jobs diários: roda uma vez ou fica agendado."""
+    """Ponto de entrada dos jobs diários: roda uma vez, ou fica agendado.
+
+    Sem ``--schedule``, executa o ciclo uma única vez e termina (para cron ou
+    Agendador de Tarefas). Com ``--schedule``, entrega a tarefa ao APScheduler
+    (``jobs.apscheduler_runner``), que a dispara todos os dias no horário.
+    """
     parser = argparse.ArgumentParser(prog=f"python -m jobs.{job_name}", description=descricao)
     parser.add_argument(
         "--schedule", action="store_true",
-        help=f"fica em execução e roda todos os dias às {horario} ({settings.TIMEZONE}); "
-             "sem a opção, roda uma vez e termina (para cron ou Agendador de Tarefas)")
+        help=f"fica em execução (APScheduler) e roda todos os dias às {horario} "
+             f"({settings.TIMEZONE}); sem a opção, roda uma vez e termina "
+             "(para cron ou Agendador de Tarefas)")
     parser.add_argument("--cutoff", type=parse_date, default=None,
                         help="dia a fechar (AAAA-MM-DD); por padrão é calculado pelo job")
     args = parser.parse_args(argv)
 
     def executar() -> Dict[str, Any]:
-        # O corte é resolvido a cada execução: no modo agendado o dia muda.
         dia = args.cutoff or cutoff()
         resultado = run_job(job_name, cutoff_date=dia, **collection_window(dia))
         print(json.dumps(resultado, ensure_ascii=False, indent=2, default=str))
         return resultado
 
     if args.schedule:
-        run_scheduled(executar, horario)
-        return 0
+        # Import tardio: APScheduler é exigido só por quem agenda; execução
+        # única (cron, Agendador de Tarefas) não depende dele.
+        from jobs.apscheduler_runner import JobSpec, SchedulerConfig, serve
+
+        spec = JobSpec(job_name, horario, descricao, cutoff)
+        if args.cutoff:
+            # --cutoff fixa o dia de todas as execuções agendadas.
+            spec = replace(spec, cutoff=lambda: args.cutoff)
+        return serve(SchedulerConfig.from_settings([spec]))
     return EXIT_CODES.get(executar()["status"], 1)

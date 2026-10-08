@@ -4,7 +4,7 @@ Roda às ``UPDATE_TIME`` (00:00) no fuso ``TIMEZONE``. O dia que acabou de
 terminar é o corte: tudo o que foi publicado nele já está disponível.
 
     python -m jobs.update_daily              # uma vez (cron / Agendador de Tarefas)
-    python -m jobs.update_daily --schedule   # fica rodando e dispara todo dia
+    python -m jobs.update_daily --schedule   # agendador APScheduler embutido
 """
 
 import sys

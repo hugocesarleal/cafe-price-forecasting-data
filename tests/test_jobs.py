@@ -1,10 +1,11 @@
-"""Jobs: horários, dia de corte, novas tentativas, agendamento e linha de comando.
+"""Jobs: horários, dia de corte, novas tentativas e linha de comando.
 
 Tudo roda em memória: o ciclo de dados é substituído por um dublê, então estes
-testes cobrem só o que é responsabilidade dos jobs.
+testes cobrem só o que é responsabilidade dos jobs. O agendamento (APScheduler)
+é coberto em ``test_scheduler.py``.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -32,42 +33,9 @@ class PipelineDuble:
         return {"job_name": job_name, "status": self.status}
 
 
-class Relogio:
-    """Relógio falso: ``sleep`` avança o tempo em vez de esperar."""
-
-    def __init__(self, inicio):
-        self.agora = inicio
-        self.dormidas = []
-
-    def now(self):
-        return self.agora
-
-    def sleep(self, segundos):
-        self.dormidas.append(segundos)
-        self.agora += timedelta(seconds=segundos)
-
-
 # ---------------------------------------------------------------------------
 # Horários e dia de corte
 # ---------------------------------------------------------------------------
-
-def test_proxima_execucao_e_hoje_se_o_horario_ainda_nao_passou():
-    agora = datetime(2026, 10, 7, 18, 30, tzinfo=SP)
-
-    assert runner.next_run_at(agora, "19:00") == datetime(2026, 10, 7, 19, 0, tzinfo=SP)
-
-
-def test_proxima_execucao_e_amanha_se_o_horario_ja_passou():
-    agora = datetime(2026, 10, 7, 19, 0, tzinfo=SP)  # exatamente na hora: já rodou
-
-    assert runner.next_run_at(agora, "19:00") == datetime(2026, 10, 8, 19, 0, tzinfo=SP)
-
-
-def test_meia_noite_cai_na_virada_do_dia_no_fuso_configurado():
-    agora = datetime(2026, 12, 31, 23, 59, tzinfo=SP)
-
-    assert runner.next_run_at(agora, "00:00") == datetime(2027, 1, 1, 0, 0, tzinfo=SP)
-
 
 @pytest.mark.parametrize("invalido", ["", "25:00", "12h30", "12", None])
 def test_horario_invalido_e_rejeitado(invalido):
@@ -146,36 +114,6 @@ def test_sem_novas_tentativas_configuradas_falha_na_primeira():
                                sleep=lambda s: None)
 
     assert resultado["status"] == "FAILED" and resultado["tentativas"] == 1
-
-
-# ---------------------------------------------------------------------------
-# Agendamento
-# ---------------------------------------------------------------------------
-
-def test_agendador_espera_ate_o_horario_e_roda_uma_vez_por_dia():
-    relogio = Relogio(datetime(2026, 10, 7, 23, 58, 30, tzinfo=SP))
-    disparos = []
-
-    execucoes = runner.run_scheduled(lambda: disparos.append(relogio.agora), "00:00",
-                                     now=relogio.now, sleep=relogio.sleep, max_runs=3)
-
-    assert execucoes == 3
-    assert disparos == [datetime(2026, 10, d, 0, 0, tzinfo=SP) for d in (8, 9, 10)]
-    assert max(relogio.dormidas) <= runner.MAX_SLEEP_SECONDS
-
-
-def test_agendador_sobrevive_a_uma_execucao_com_erro():
-    relogio = Relogio(datetime(2026, 10, 7, 12, 0, tzinfo=SP))
-    disparos = []
-
-    def executar():
-        disparos.append(relogio.agora.date())
-        if len(disparos) == 1:
-            raise RuntimeError("falha do primeiro dia")
-
-    assert runner.run_scheduled(executar, "19:00", now=relogio.now,
-                                sleep=relogio.sleep, max_runs=2) == 2
-    assert disparos == [date(2026, 10, 7), date(2026, 10, 8)]
 
 
 # ---------------------------------------------------------------------------

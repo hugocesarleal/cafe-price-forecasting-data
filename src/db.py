@@ -8,9 +8,6 @@ from psycopg.rows import dict_row
 from src.config import settings
 from src.logging_config import logger
 
-# Hash constante para o lock do pipeline
-PIPELINE_ADVISORY_LOCK_ID = 84729103
-
 
 def get_connection(
     host: Optional[str] = None,
@@ -18,9 +15,27 @@ def get_connection(
     dbname: Optional[str] = None,
     user: Optional[str] = None,
     password: Optional[str] = None,
-    autocommit: bool = False
+    autocommit: bool = False,
+    dsn: Optional[str] = None
 ) -> psycopg.Connection:
-    """Cria e retorna uma conexão direta com o PostgreSQL."""
+    """Cria e retorna uma conexão direta com o PostgreSQL.
+
+    Precedência da conexão: ``dsn`` explícito > ``PIPELINE_DATABASE_URL``
+    (quando nenhuma parte explícita foi informada) > campos ``DB_*``.
+    A URL e a senha nunca são registradas em log.
+    """
+    url = dsn or settings.PIPELINE_DATABASE_URL
+    partes_explicitas = any(v is not None for v in (host, port, dbname, user, password))
+
+    if url and not partes_explicitas:
+        conn = psycopg.connect(url, autocommit=autocommit, row_factory=dict_row)
+        logger.debug("Conexão PostgreSQL aberta via URL configurada.")
+        return conn
+
+    if url:
+        logger.debug(
+            "Partes explícitas de conexão têm precedência sobre a URL configurada."
+        )
     conn = psycopg.connect(
         host=host or settings.DB_HOST,
         port=port or settings.DB_PORT,
@@ -30,7 +45,30 @@ def get_connection(
         autocommit=autocommit,
         row_factory=dict_row
     )
+    logger.debug(
+        "Conexão PostgreSQL aberta em %s:%s/%s.",
+        host or settings.DB_HOST, port or settings.DB_PORT, dbname or settings.DB_NAME,
+    )
     return conn
+
+
+@contextlib.contextmanager
+def pipeline_connection(
+    dsn: Optional[str] = None, **kwargs
+) -> Generator[psycopg.Connection, None, None]:
+    """Conexão dedicada a um ciclo do pipeline, com abertura/fechamento registrados.
+
+    O ciclo inteiro (advisory lock e todas as etapas) roda nesta única conexão:
+    o lock é de sessão, então precisa ser adquirido, usado e liberado na mesma
+    conexão — e é quem abre que fecha, inclusive quando o ciclo falha.
+    """
+    conn = get_connection(dsn=dsn, **kwargs)
+    logger.info("Conexão do pipeline aberta.")
+    try:
+        yield conn
+    finally:
+        conn.close()
+        logger.info("Conexão do pipeline fechada.")
 
 
 @contextlib.contextmanager
@@ -57,11 +95,14 @@ def db_cursor(conn: Optional[psycopg.Connection] = None, commit: bool = True) ->
 
 
 @contextlib.contextmanager
-def acquire_advisory_lock(conn: psycopg.Connection, lock_id: int = PIPELINE_ADVISORY_LOCK_ID):
+def acquire_advisory_lock(conn: psycopg.Connection, lock_id: Optional[int] = None):
     """Adquire um advisory lock no PostgreSQL para impedir concorrência.
-    
-    Lança RuntimeError se o lock já estiver ocupado por outra instância.
+
+    ``lock_id`` explícito tem precedência; sem ele, vale ``ADVISORY_LOCK_KEY``
+    da configuração. Lança RuntimeError se o lock já estiver ocupado por
+    outra instância.
     """
+    lock_id = settings.ADVISORY_LOCK_KEY if lock_id is None else lock_id
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(%s) AS locked;", (lock_id,))
         row = cur.fetchone()

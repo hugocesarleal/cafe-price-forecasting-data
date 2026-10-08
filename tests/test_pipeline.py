@@ -18,7 +18,7 @@ from conftest import (
     linha_mercado,
 )
 from src import pipeline
-from src.db import PIPELINE_ADVISORY_LOCK_ID, acquire_advisory_lock, get_connection
+from src.db import acquire_advisory_lock, get_connection
 
 VERSAO_FALSA = {
     "dataset_version_id": "00000000-0000-0000-0000-000000000001",
@@ -31,11 +31,12 @@ VERSAO_FALSA = {
 @pytest.fixture
 def dataset_falso(monkeypatch):
     """Dublê de ``run_dataset_build``; ``resposta`` pode ser trocada pelo teste."""
-    estado = {"chamadas": [], "resposta": {"run_id": None, "status": "SUCCESS",
-                                           "versao": dict(VERSAO_FALSA)}}
+    estado = {"chamadas": [], "conexoes": [], "resposta": {"run_id": None, "status": "SUCCESS",
+                                                           "versao": dict(VERSAO_FALSA)}}
 
     def falso(conn, **kwargs):
         estado["chamadas"].append(kwargs)
+        estado["conexoes"].append(conn)
         if isinstance(estado["resposta"], Exception):
             raise estado["resposta"]
         return estado["resposta"]
@@ -160,7 +161,7 @@ def test_erro_inesperado_e_auditado_propagado_e_libera_o_lock(ingest_conn, rodar
     # Outra conexão consegue o lock: ele não ficou preso na sessão que falhou.
     outra = get_connection()
     try:
-        with acquire_advisory_lock(outra, PIPELINE_ADVISORY_LOCK_ID):
+        with acquire_advisory_lock(outra):
             pass
     finally:
         outra.close()
@@ -174,7 +175,7 @@ def test_erro_inesperado_e_auditado_propagado_e_libera_o_lock(ingest_conn, rodar
 def test_ciclo_e_bloqueado_enquanto_outro_job_roda(ingest_conn, rodar, dataset_falso):
     detentor = get_connection()
     try:
-        with acquire_advisory_lock(detentor, PIPELINE_ADVISORY_LOCK_ID):
+        with acquire_advisory_lock(detentor):
             resultado = rodar()
     finally:
         detentor.close()
@@ -184,3 +185,75 @@ def test_ciclo_e_bloqueado_enquanto_outro_job_roda(ingest_conn, rodar, dataset_f
     assert dataset_falso["chamadas"] == []
     assert execucao(ingest_conn, resultado["run_id"])["status"] == "BLOCKED"
     assert contar_do_teste(ingest_conn, "raw.ingestion_files") == 0
+
+
+# ---------------------------------------------------------------------------
+# Conexão única do ciclo: lock e etapas na mesma sessão psycopg
+# ---------------------------------------------------------------------------
+
+def test_ciclo_sem_conexao_propria_abre_uma_unica_conexao_e_a_fecha(ingest_conn, dataset_falso, monkeypatch):
+    abertas = []
+    real = pipeline.get_connection
+
+    def contando(*args, **kwargs):
+        conn = real(*args, **kwargs)
+        abertas.append(conn)
+        return conn
+
+    monkeypatch.setattr(pipeline, "get_connection", contando)
+
+    resultado = pipeline.run_pipeline(
+        JOB_NAME_TESTES, client=StubAgrobrClient(),
+        ingestion_job=JOB_NAME_TESTES, dataset_job=JOB_NAME_TESTES)
+
+    assert resultado["status"] == "SUCCESS"
+    assert len(abertas) == 1, "O ciclo inteiro roda numa única conexão"
+    assert dataset_falso["conexoes"][0] is abertas[0], "O dataset usa a conexão do ciclo"
+    assert abertas[0].closed, "Quem abre a conexão é quem fecha"
+
+
+def test_lock_e_etapas_na_mesma_conexao(ingest_conn, dataset_falso, monkeypatch):
+    abertas, conexao_do_lock = [], []
+    real_conn = pipeline.get_connection
+    real_lock = pipeline.acquire_advisory_lock
+
+    def contando(*args, **kwargs):
+        conn = real_conn(*args, **kwargs)
+        abertas.append(conn)
+        return conn
+
+    def lock_espiao(conn, *args, **kwargs):
+        conexao_do_lock.append(conn)
+        return real_lock(conn, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "get_connection", contando)
+    monkeypatch.setattr(pipeline, "acquire_advisory_lock", lock_espiao)
+
+    resultado = pipeline.run_pipeline(
+        JOB_NAME_TESTES, client=StubAgrobrClient(),
+        ingestion_job=JOB_NAME_TESTES, dataset_job=JOB_NAME_TESTES)
+
+    assert resultado["status"] == "SUCCESS"
+    assert conexao_do_lock == [abertas[0]], "O lock é adquirido na conexão do ciclo"
+    assert dataset_falso["conexoes"][0] is abertas[0], "As etapas usam a conexão do lock"
+
+
+def test_conexao_propria_e_fechada_mesmo_com_erro(ingest_conn, dataset_falso, monkeypatch):
+    abertas = []
+    real = pipeline.get_connection
+
+    def contando(*args, **kwargs):
+        conn = real(*args, **kwargs)
+        abertas.append(conn)
+        return conn
+
+    monkeypatch.setattr(pipeline, "get_connection", contando)
+    dataset_falso["resposta"] = RuntimeError("falha na construção")
+
+    with pytest.raises(RuntimeError, match="falha na construção"):
+        pipeline.run_pipeline(
+            JOB_NAME_TESTES, client=StubAgrobrClient(),
+            ingestion_job=JOB_NAME_TESTES, dataset_job=JOB_NAME_TESTES)
+
+    assert len(abertas) == 1
+    assert abertas[0].closed, "A conexão do ciclo é fechada também quando a etapa falha"

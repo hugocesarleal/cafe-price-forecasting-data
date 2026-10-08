@@ -3,8 +3,8 @@
 Roda às ``AFTER_CLOSE_TIME`` no fuso ``TIMEZONE``, horário em que o indicador
 CEPEA e os ajustes do dia já devem estar publicados. O corte é hoje.
 
-    python -m jobs.update_after_close
-    python -m jobs.update_after_close --schedule
+    python -m jobs.update_after_close              # uma vez (cron / Agendador de Tarefas)
+    python -m jobs.update_after_close --schedule   # agendador APScheduler embutido
 """
 
 import sys

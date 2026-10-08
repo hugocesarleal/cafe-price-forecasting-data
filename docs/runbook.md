@@ -19,7 +19,21 @@ Cada job faz o ciclo inteiro: coleta → `raw` → validação → `staging` →
 Duas formas de agendar:
 
 - **Agendador externo** (cron, Agendador de Tarefas): chame o job sem opções. Ele roda uma vez e devolve o código de saída.
-- **Agendador embutido**: `python -m jobs.update_daily --schedule` fica em execução e dispara todo dia no horário. É um processo por job; se ele cair, nada o reinicia.
+- **Agendador embutido** (APScheduler): `python -m jobs.update_daily --schedule` fica em execução e dispara todo dia no horário, no fuso `TIMEZONE`. É um processo por job; se ele cair, nada o reinicia. O log registra "Agendador iniciado (...)" ao subir e "Disparo agendado: ..." a cada dia.
+
+Comportamentos do agendador embutido:
+
+| Situação | O que acontece |
+|---|---|
+| Máquina dormiu ou processo lento | Disparos atrasados são colapsados (`coalesce`): no máximo uma rodada, nunca várias cargas em fila |
+| Execução ainda rodando no horário do próximo disparo | O novo disparo espera (`max_instances=1`); execuções não se sobrepõem |
+| Atraso maior que `MISFIRE_GRACE_SECONDS` (padrão 1h) | Disparo registrado como perdido no log; nada roda sozinho até o próximo horário |
+| Outra execução segura o advisory lock | Execução agendada termina BLOCKED e é registrada como pulada; o agendador segue vivo |
+| Reinício do processo | `replace_existing` com id estável não duplica o job; execução perdida no meio não é reexecutada |
+| SIGTERM/SIGINT | Encerramento controlado: espera a execução em curso terminar e sai com código 0 |
+| `SCHEDULER_ENABLED=false` | Agendamento desligado sem erro (para ambiente onde outro agendador manda) |
+
+`python -m jobs.update_daily --schedule --cutoff 2026-09-30` fixa o dia fechado em todas as execuções agendadas.
 
 | Código de saída | Significado | O que fazer |
 |---|---|---|
@@ -187,7 +201,7 @@ O lock é de sessão do PostgreSQL: some quando a conexão que o segura fecha. S
 SELECT a.pid, a.state, a.query_start, a.application_name, left(a.query, 80) AS consulta
 FROM pg_locks l
 JOIN pg_stat_activity a ON a.pid = l.pid
-WHERE l.locktype = 'advisory' AND l.objid = 84729103;
+WHERE l.locktype = 'advisory' AND l.objid = 84729103;  -- valor de ADVISORY_LOCK_KEY
 ```
 
 Confirme que o processo não é um job legítimo em andamento e só então encerre a conexão com `SELECT pg_terminate_backend(<pid>);`.

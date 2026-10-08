@@ -20,7 +20,7 @@ from conftest import (
 )
 from src.agrobr_client import SourceFetchError
 from src.config import settings
-from src.db import PIPELINE_ADVISORY_LOCK_ID, acquire_advisory_lock, get_connection
+from src.db import acquire_advisory_lock, get_connection
 from src.ingestion import (
     EVENTO_BLOQUEIO_QUALIDADE,
     EVENTO_CONCLUSAO,
@@ -314,13 +314,13 @@ def test_erro_que_nao_e_de_coleta_nao_tenta_de_novo(ingest_conn, executar_pipeli
 def test_execucao_concorrente_e_bloqueada_pelo_advisory_lock(ingest_conn, executar_pipeline):
     detentor = get_connection()
     try:
-        with acquire_advisory_lock(detentor, PIPELINE_ADVISORY_LOCK_ID):
+        with acquire_advisory_lock(detentor):
             metricas = executar_pipeline()
     finally:
         detentor.close()
 
     assert metricas["status"] == "BLOCKED"
-    assert str(PIPELINE_ADVISORY_LOCK_ID) in metricas["blocked_reason"]
+    assert str(settings.ADVISORY_LOCK_KEY) in metricas["blocked_reason"]
 
     registro = run_status(ingest_conn, metricas["run_id"])
     assert registro["status"] == "BLOCKED"
@@ -336,7 +336,7 @@ def test_execucao_concorrente_e_bloqueada_pelo_advisory_lock(ingest_conn, execut
 def test_lock_e_liberado_ao_final_e_nova_execucao_prosseguir(ingest_conn, executar_pipeline):
     detentor = get_connection()
     try:
-        with acquire_advisory_lock(detentor, PIPELINE_ADVISORY_LOCK_ID):
+        with acquire_advisory_lock(detentor):
             bloqueada = executar_pipeline()
     finally:
         detentor.close()

@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**. O que falta para o aceite é rodar a suíte completa contra um PostgreSQL — ver o estado da verificação na etapa 8 e a tabela de critérios de aceite ao final.
+O documento define **8 etapas de entrega**. As **8 etapas estão implementadas** e a suíte completa roda verde contra PostgreSQL 16 (334 passaram, 1 desligado por padrão — o teste que acessa as fontes reais). Depois do MVP, o repositório recebeu a **integração com Django** e a **migração do agendador para APScheduler** — ver a seção correspondente antes das observações operacionais.
 
 ---
 
@@ -137,7 +137,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
   - [x] retry seguro após falha — `jobs/runner.py` repete o ciclo após erro inesperado (`JOB_MAX_RETRIES`, `JOB_RETRY_WAIT_SECONDS`)
 - [x] Sem duplicar dados/previsões entre jobs: origem inalterada não é republicada, conteúdo idêntico reaproveita a versão do dataset e previsões são gravadas por upsert
 - [x] Hora da última observação disponível e da última ingestão registradas em `audit.pipeline_runs.metadata` da execução do job
-- [x] Cada job roda uma vez (para cron / Agendador de Tarefas) ou fica agendado com `--schedule`
+- [x] Cada job roda uma vez (para cron / Agendador de Tarefas) ou fica agendado com `--schedule` (APScheduler desde a migração pós-MVP — ver seção ao final)
 
 > **Mudanças na ingestão que esta etapa exigiu**:
 > - Uma origem só conta como "inalterada" em relação à última carga que terminou em **SUCCESS**. Antes, o hash de uma carga que falhou no meio já valia: a tentativa seguinte via "nada mudou" e o dado nunca chegava a `core`; e repetir uma carga reprovada por qualidade virava um SUCCESS vazio.
@@ -151,7 +151,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > - Se a ingestão é reprovada, o dataset não é reconstruído naquele ciclo.
 > - Os jobs não chamam o modelo: registrar previsões continua sendo iniciativa do componente de rede neural (`src/model_contract.py`).
 > - `COLLECTION_WINDOW_DAYS` (padrão `0`, janela inteira) permite que os jobs agendados recoletem só os dias recentes. Com `0`, cada execução regrava o histórico todo em `raw`.
-> - O agendador embutido (`--schedule`) é um laço simples em um processo; não há serviço do sistema nem dependência nova.
+> - O agendador embutido (`--schedule`) usa APScheduler (`jobs/apscheduler_runner.py`): `CronTrigger` diário no fuso `TIMEZONE`, `coalesce=True`, `max_instances=1`, tolerância `MISFIRE_GRACE_SECONDS`, id estável (`SCHEDULER_JOB_ID`) e encerramento por SIGTERM/SIGINT. Continua sendo um processo por job, sem serviço do sistema.
 
 ## Etapa 8 — Testes e README ✅ CONCLUÍDA (20 de 20 obrigatórios implementados)
 
@@ -169,9 +169,9 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 - [x] `docs/runbook.md` — operação, recuperação e reprocessamento
 - [x] README com configuração, execução de cada etapa, jobs, poda e testes
 
-> **Estado da verificação**: os testes que rodam em memória passam. Os que exigem PostgreSQL — toda a suíte de ingestão, idempotência, schema e migração, e a parte de banco de features, versionamento, contrato, orquestrador e poda — **não foram executados** no ambiente em que as etapas 5 a 8 foram escritas, que não tinha PostgreSQL. Rodar `python -m pytest tests/ -v` contra um banco é o que falta para considerar o MVP aceito.
+> **Estado da verificação**: a suíte completa já foi executada contra PostgreSQL 16 e **passa** — 334 testes passaram e 1 ficou desligado por padrão (o que acessa as fontes reais; ligue com `RUN_LIVE_TESTS=1`). Isso cobriu ingestão, idempotência, schema e migração, features, versionamento, contrato, orquestrador, poda, jobs, agendador e a fronteira Django.
 >
-> Os testes 9 a 11 e a suíte anterior foram escritos na etapa 4; a mudança da etapa 7 na detecção de origem inalterada os afeta e também precisa dessa rodada.
+> Os testes 9 a 11 e a suíte da etapa 4 também foram executados nessa rodada; a mudança da etapa 7 na detecção de origem inalterada está coberta.
 
 > **Decisões da poda que valem revisão**:
 > - A poda vale para uma versão; versões novas nascem com a janela inteira.
@@ -201,6 +201,34 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 > - O leitor da planilha foi escrito a partir do script legado e conferido com as duas planilhas reais do CEPEA em 07/10/2026: os preços das datas em comum com os CSVs anteriores coincidiram exatamente.
 > - `usd_brl_compra` e as variáveis DROP do legado (Selic, IPCA, COT, DXY, Brent, ONI) não são coletadas.
 
+## Integração com Django e agendador APScheduler ✅ IMPLEMENTADO (pós-MVP)
+
+Trabalho executado depois das 8 etapas, a pedido da equipe: chamar o pipeline a partir do Django como biblioteca externa e trocar o laço de `sleep` do agendador embutido por APScheduler.
+
+- [x] **`src/integrations/django.py`** — adaptador de fronteira (caixa preta):
+  - [x] precedência de configuração por campo: explícita do chamador > Django > ambiente/`.env`; divergência nunca passa em silêncio (campo injetável é honrado com aviso registrando a fonte; qualquer outro campo divergente derruba com `PipelineConfigError`)
+  - [x] abre a **própria** conexão psycopg do ciclo (`src.db.pipeline_connection`) e mantém o advisory lock nela até o fim — nunca a conexão do ciclo de requests do Django
+  - [x] `run_pipeline_job`, `run_ingestion_job`, `run_dataset_job`: mesmas repetições, idempotência, auditoria e formato de retorno dos jobs
+  - [x] leitura somente consulta para painel: `read_recent_runs`, `latest_successful_run`
+  - [x] nenhum import de Django no `src/`; acoplamento confinado em `examples/django_integration/`
+- [x] **`examples/django_integration/`** — management command fino (código de saída 0/1/2), task Celery e ModelAdmin somente leitura sobre `audit.pipeline_runs` (`managed = False`)
+- [x] **`jobs/apscheduler_runner.py`** — substitui o laço de `sleep` do runner, preservando `run_job`, retries, corte por dia, idempotência, lock, logs e formato de retorno:
+  - [x] `CronTrigger` diário no fuso `TIMEZONE`; horário inválido derruba antes de agendar
+  - [x] `coalesce=True`, `max_instances=1`, `misfire_grace_time` (`MISFIRE_GRACE_SECONDS`, padrão 1h): atraso dentro da tolerância roda uma vez; além dela, misfire registrado sem execução automática
+  - [x] `replace_existing=True` com id estável (`SCHEDULER_JOB_ID` ou o nome do job): reiniciar não duplica
+  - [x] listeners de sucesso/erro/misfire; falha de um disparo não derruba o agendador
+  - [x] encerramento controlado por SIGTERM/SIGINT, esperando a execução em curso; `SCHEDULER_ENABLED=false` desliga sem erro
+  - [x] `--schedule` dos jobs delega ao agendador; `--cutoff` fixa o dia de todas as execuções agendadas
+- [x] Config central (`src/config.py`): `PIPELINE_DATABASE_URL`, `ADVISORY_LOCK_KEY`, `SCHEDULER_ENABLED`, `SCHEDULER_JOB_ID`, `MISFIRE_GRACE_SECONDS` — sem nomes paralelos; validação no carregamento
+- [x] Testes: `test_scheduler.py` (20) substitui os testes presos ao `sleep`; `test_django_integration.py` (17); `test_jobs.py` migrado (34 → 29, sem os casos do laço antigo)
+
+> **Decisões que valem revisão**:
+> - Horário de verão não existe no Brasil desde 2019; um teste documenta o deslocamento constante UTC-3 em vez de simular DST.
+> - `SCHEDULER_JOB_ID` só vale com um job por processo (`python -m jobs.X --schedule`); com vários jobs o id estável é o próprio nome (erro explícito se configurado).
+> - O agendador embutido continua sendo um processo por job; para os três horários, rode três processos ou use um agendador externo (cron) que não depende do pacote `apscheduler`.
+> - A fronteira Django não expõe `ADVISORY_LOCK_KEY` como injetável de propósito: o lock é o mecanismo de exclusão mútua entre processos e precisa valer o mesmo para todos.
+> - Não há modelagem Django do banco: o modelo do Admin é `managed = False` e o esquema continua sendo criado somente pelas migrations SQL de `sql/`.
+
 ## Observações operacionais
 
 1. **O que falta para fechar**: executar `python -m pytest tests/ -v` com PostgreSQL disponível e resolver o que aparecer.
@@ -210,24 +238,24 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 
 ## Critérios de aceite do documento
 
-Legenda: ✅ implementado e verificado por teste em memória · 🟡 implementado, verificação depende de PostgreSQL · ❌ não atendido.
+Legenda: ✅ implementado e verificado pela suíte contra PostgreSQL · ❌ não atendido.
 
 | Critério | Estado | Onde |
 |---|---|---|
-| PostgreSQL sobe localmente | 🟡 | `docker-compose.yml` |
-| Migrations criam tudo | 🟡 | `src/migrator.py`, `test_schema.py` |
-| SQLite migra para base de teste | 🟡 | `src/sqlite_migrator.py`, `test_sqlite_migration.py` |
+| PostgreSQL sobe localmente | ✅ | `docker-compose.yml`; suíte executada contra PostgreSQL 16 |
+| Migrations criam tudo | ✅ | `src/migrator.py`, `test_schema.py` |
+| SQLite migra para base de teste | ✅ | `src/sqlite_migrator.py`, `test_sqlite_migration.py` |
 | Pipeline baixa ou simula Agro.br | ✅ | os dois modos; a coleta real foi executada contra as seis fontes e é coberta por `test_agrobr_real.py` |
-| Mesma carga roda 2× sem duplicidade | 🟡 | `test_idempotency.py`; ressalva: `src.sqlite_migrator` duplica `raw` se rodar 2× |
+| Mesma carga roda 2× sem duplicidade | ✅ | `test_idempotency.py`; ressalva: `src.sqlite_migrator` duplica `raw` se rodar 2× |
 | Variáveis geradas com nomes/tipos documentados | ✅ | `docs/data_dictionary.md`, `test_feature_catalog.py` |
 | Excluídas fora da consulta padrão | ✅ | `test_feature_catalog.py` (15) |
-| Brutos rastreáveis | 🟡 | `raw.*` com `file_id`, `pipeline_run_id`, hash |
-| Falha não destrói a última versão válida | 🟡 | `test_dataset_versioning.py` (20) |
+| Brutos rastreáveis | ✅ | `raw.*` com `file_id`, `pipeline_run_id`, hash |
+| Falha não destrói a última versão válida | ✅ | `test_dataset_versioning.py` (20) |
 | Poda ≤ 2 anos | ✅ | `test_pruning.py` (12) |
 | 4 horizontes parametrizados | ✅ | `FORECAST_HORIZONS`, `test_feature_catalog.py` (17) |
 | Testes de vazamento temporal passando | ✅ | `test_no_future_leakage.py` (16) |
-| Triggers/procedures nos limites definidos | 🟡 | `sql/triggers.sql`, `sql/functions.sql`: só `updated_at`, eventos e upsert |
-| Logs/status/hash/versão/contagens registrados | 🟡 | `audit.pipeline_runs`, `raw.ingestion_files`, `features.dataset_versions` |
+| Triggers/procedures nos limites definidos | ✅ | `sql/triggers.sql`, `sql/functions.sql`: só `updated_at`, eventos e upsert |
+| Logs/status/hash/versão/contagens registrados | ✅ | `audit.pipeline_runs`, `raw.ingestion_files`, `features.dataset_versions` |
 | README completo | ✅ | `README.md`, `docs/runbook.md` |
 | Contrato com o modelo documentado | ✅ | `docs/model_contract.md`, `src/model_contract.py` |
 | Nenhum widget/tela/modelo neste escopo | ✅ | só o consumidor simulado, que não é modelo |

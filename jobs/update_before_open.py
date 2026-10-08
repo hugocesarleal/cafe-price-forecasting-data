@@ -4,8 +4,8 @@ Roda às ``BEFORE_OPEN_TIME`` no fuso ``TIMEZONE``. O corte ainda é ontem; a
 execução serve para capturar o que foi publicado ou revisado durante a
 madrugada. Se nada mudou desde o job diário, nada é regravado.
 
-    python -m jobs.update_before_open
-    python -m jobs.update_before_open --schedule
+    python -m jobs.update_before_open              # uma vez (cron / Agendador de Tarefas)
+    python -m jobs.update_before_open --schedule   # agendador APScheduler embutido
 """
 
 import sys
