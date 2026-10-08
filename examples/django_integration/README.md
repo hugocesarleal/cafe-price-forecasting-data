@@ -52,8 +52,8 @@ run_pipeline_job(
 
 ## Banco e migrações
 
-O esquema é criado **somente** pelas migrações SQL de `sql/` (aplicadas pelo
-próprio pipeline, ex.: `python -m src.migrate`). Não crie migrations Django
+O esquema é criado **somente** pelas migrações SQL de `migrations/` (aplicadas pelo
+próprio pipeline: `python -m src.migrator`). Não crie migrations Django
 duplicadas para as mesmas tabelas: como `PipelineRun` é `managed = False`, o
 Django nem tenta criar nada — o modelo existe só para o Admin.
 

@@ -220,14 +220,14 @@ Trabalho executado depois das 8 etapas, a pedido da equipe: chamar o pipeline a 
   - [x] encerramento controlado por SIGTERM/SIGINT, esperando a execução em curso; `SCHEDULER_ENABLED=false` desliga sem erro
   - [x] `--schedule` dos jobs delega ao agendador; `--cutoff` fixa o dia de todas as execuções agendadas
 - [x] Config central (`src/config.py`): `PIPELINE_DATABASE_URL`, `ADVISORY_LOCK_KEY`, `SCHEDULER_ENABLED`, `SCHEDULER_JOB_ID`, `MISFIRE_GRACE_SECONDS` — sem nomes paralelos; validação no carregamento
-- [x] Testes: `test_scheduler.py` (20) substitui os testes presos ao `sleep`; `test_django_integration.py` (17); `test_jobs.py` migrado (34 → 29, sem os casos do laço antigo)
+- [x] Testes: `test_scheduler.py` (20) substitui os testes presos ao `sleep`; `test_django_integration.py` (19); `test_jobs.py` migrado (34 → 29, sem os casos do laço antigo)
 
 > **Decisões que valem revisão**:
 > - Horário de verão não existe no Brasil desde 2019; um teste documenta o deslocamento constante UTC-3 em vez de simular DST.
 > - `SCHEDULER_JOB_ID` só vale com um job por processo (`python -m jobs.X --schedule`); com vários jobs o id estável é o próprio nome (erro explícito se configurado).
 > - O agendador embutido continua sendo um processo por job; para os três horários, rode três processos ou use um agendador externo (cron) que não depende do pacote `apscheduler`.
 > - A fronteira Django não expõe `ADVISORY_LOCK_KEY` como injetável de propósito: o lock é o mecanismo de exclusão mútua entre processos e precisa valer o mesmo para todos.
-> - Não há modelagem Django do banco: o modelo do Admin é `managed = False` e o esquema continua sendo criado somente pelas migrations SQL de `sql/`.
+> - Não há modelagem Django do banco: o modelo do Admin é `managed = False` e o esquema continua sendo criado somente pelas migrations SQL de `migrations/`.
 
 ## Observações operacionais
 

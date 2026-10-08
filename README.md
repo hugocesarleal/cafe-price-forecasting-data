@@ -303,7 +303,7 @@ resultado = run_dataset_job("pipeline_django")      # só construção do datase
 
 Precedência de configuração, por campo: **explícita do chamador > Django > ambiente/`.env`**. Divergência nunca passa em silêncio: campos de conexão e de retry são honrados com aviso registrando qual fonte venceu; qualquer outro campo divergente derruba a chamada com `PipelineConfigError`.
 
-Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `sql/` — não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
+Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `migrations/` (`python -m src.migrator`) — não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
 
 ### 11. Podar a janela histórica
 
@@ -414,7 +414,7 @@ python -m pytest tests/ -v --tb=short
 | `test_pipeline.py` | 11 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado, lock e conexão única do ciclo |
 | `test_jobs.py` | 29 | Horários e fuso, dia de corte de cada job, novas tentativas, códigos de saída e argumentos |
 | `test_scheduler.py` | 20 | Agendador APScheduler: gatilhos e fuso, tolerância de atraso (misfire), `coalesce`/`max_instances`, reinício sem duplicar, lock como barreira, falha que não derruba o processo, encerramento controlado e ponte do modo `--schedule` |
-| `test_django_integration.py` | 17 | Adaptador Django: precedência de configuração (explícita > Django > ambiente), validação de campos, conexão própria do ciclo, tradução de erros e leitura do Admin |
+| `test_django_integration.py` | 19 | Adaptador Django: precedência de configuração (explícita > Django > ambiente), validação de campos, conexão própria do ciclo, tradução de erros e leitura do Admin |
 | `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
 
 Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; os 20 estão implementados.

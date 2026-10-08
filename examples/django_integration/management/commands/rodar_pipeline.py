@@ -18,10 +18,11 @@ Uso:
 
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date
 
 from django.core.management.base import BaseCommand
 
+from jobs.runner import yesterday_local
 from src.integrations.django import run_dataset_job, run_pipeline_job
 from src.pipeline import STATUS_BLOCKED, STATUS_FAILED, STATUS_SUCCESS
 
@@ -51,7 +52,9 @@ class Command(BaseCommand):
             help="repetições após erro inesperado (padrão: JOB_MAX_RETRIES do ambiente)")
 
     def handle(self, *args, **options):
-        cutoff = options["cutoff"] or date.today() - timedelta(days=1)
+        # "Ontem" no fuso do pipeline (TIMEZONE), não no relógio do servidor: num
+        # servidor em UTC os dois divergem entre 21h e meia-noite de Brasília.
+        cutoff = options["cutoff"] or yesterday_local()
 
         if options["somente_dataset"]:
             resultado = run_dataset_job(

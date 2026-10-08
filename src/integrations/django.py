@@ -178,6 +178,30 @@ def connection_options(cfg: ResolvedConfig) -> Dict[str, Any]:
     }
 
 
+def retry_options(
+    cfg: ResolvedConfig,
+    max_retries: Optional[int] = None,
+    retry_wait_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Política de repetição do ciclo conforme a precedência resolvida.
+
+    O argumento da chamada vence; sem ele, vale o valor injetado por
+    ``explicit``/``django_config``. Quando nenhum dos dois informa, o campo vai
+    como ``None`` e ``run_job`` lê o ambiente, como nos jobs agendados.
+    """
+    def resolver(argumento, campo):
+        if argumento is not None:
+            return argumento
+        if cfg.sources.get(campo) in ("explicit", "django"):
+            return getattr(cfg.settings, campo)
+        return None
+
+    return {
+        "max_retries": resolver(max_retries, "JOB_MAX_RETRIES"),
+        "retry_wait_seconds": resolver(retry_wait_seconds, "JOB_RETRY_WAIT_SECONDS"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Execução dos ciclos públicos (a mesma caixa preta dos jobs)
 # ---------------------------------------------------------------------------
@@ -240,7 +264,7 @@ def run_pipeline_job(
 
     return run_job(
         job_name, cutoff_date=cutoff_date, start_date=start_date, end_date=end_date,
-        force=force, max_retries=max_retries, retry_wait_seconds=retry_wait_seconds,
+        force=force, **retry_options(cfg, max_retries, retry_wait_seconds),
         pipeline=_ciclo_com_conexao_propria(opcoes, executar), sleep=sleep,
     )
 
@@ -269,7 +293,7 @@ def run_ingestion_job(
 
     return run_job(
         job_name, cutoff_date=cutoff_date, start_date=start_date, end_date=end_date,
-        force=force, max_retries=max_retries, retry_wait_seconds=retry_wait_seconds,
+        force=force, **retry_options(cfg, max_retries, retry_wait_seconds),
         pipeline=_ciclo_com_conexao_propria(opcoes, executar), sleep=sleep,
     )
 
@@ -304,7 +328,7 @@ def run_dataset_job(
 
     return run_job(
         job_name, cutoff_date=cutoff_date, start_date=start_date, end_date=end_date,
-        force=force, max_retries=max_retries, retry_wait_seconds=retry_wait_seconds,
+        force=force, **retry_options(cfg, max_retries, retry_wait_seconds),
         pipeline=_ciclo_com_conexao_propria(opcoes, executar), sleep=sleep,
     )
 

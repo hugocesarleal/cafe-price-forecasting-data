@@ -68,6 +68,42 @@ def test_campo_injetado_divergente_avisa_qual_fonte_venceu(caplog):
     assert "explicit" in caplog.text
 
 
+def test_repeticao_injetada_chega_ao_ciclo():
+    """O valor de retry que a fronteira diz honrar é o que o ciclo de fato usa."""
+    injetada = ad.resolve_config(
+        explicit={"JOB_MAX_RETRIES": 5}, django_config={"JOB_RETRY_WAIT_SECONDS": 7})
+    ambiente = ad.resolve_config()
+
+    assert ad.retry_options(injetada) == {"max_retries": 5, "retry_wait_seconds": 7}
+    assert ad.retry_options(injetada, max_retries=1, retry_wait_seconds=0) == {
+        "max_retries": 1, "retry_wait_seconds": 0}, "o argumento da chamada vence a injeção"
+    assert ad.retry_options(ambiente) == {"max_retries": None, "retry_wait_seconds": None}, \
+        "sem injeção, run_job lê o ambiente como nos jobs agendados"
+
+
+def test_ciclo_repete_o_numero_de_vezes_injetado(monkeypatch):
+    @contextlib.contextmanager
+    def conexao_falsa(**kwargs):
+        yield object()
+
+    tentativas, esperas = [], []
+
+    def sempre_falha(job, **kwargs):
+        tentativas.append(job)
+        raise ConnectionError("banco indisponível")
+
+    monkeypatch.setattr(ad, "pipeline_connection", conexao_falsa)
+    monkeypatch.setattr(ad, "run_pipeline", sempre_falha)
+
+    resultado = ad.run_pipeline_job(
+        "teste", explicit={"JOB_MAX_RETRIES": 4, "JOB_RETRY_WAIT_SECONDS": 3},
+        sleep=esperas.append)
+
+    assert resultado["status"] == "FAILED"
+    assert len(tentativas) == resultado["tentativas"] == 5, "1 tentativa + 4 repetições injetadas"
+    assert esperas == [3, 3, 3, 3]
+
+
 def test_campo_nao_injetavel_divergente_falha_explicitamente():
     atual = ad.Settings().LOG_LEVEL
     novo = "DEBUG" if atual != "DEBUG" else "WARNING"
