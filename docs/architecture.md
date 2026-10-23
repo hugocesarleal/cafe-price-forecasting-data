@@ -5,7 +5,7 @@
 Este componente tem como objetivo exclusivo a coleta, armazenamento, validação de qualidade, engenharia de features causais, versionamento e disponibilização de dados para o modelo de previsão do café arábica (CEPEA/ESALQ R$/saca 60kg).
 
 ### Limites Obrigatórios:
-- **Dentro do escopo:** Ingestão de dados de mercado e clima, migração do SQLite local para PostgreSQL, validação rigorosa de qualidade, derivação de features selecionadas (KEEP), separação estrita sem vazamento temporal ($X_t \to y_{t+h}$), catálogo de variáveis, versionamento imutável de datasets, controle da janela histórica e contenção de poda (máximo 2 anos), gravação contratual de previsões em `predictions.forecasts`, auditoria e observabilidade.
+- **Dentro do escopo:** Ingestão de dados de mercado e clima em PostgreSQL, validação rigorosa de qualidade, derivação de features selecionadas (KEEP), separação estrita sem vazamento temporal ($X_t \to y_{t+h}$), catálogo de variáveis, versionamento imutável de datasets, controle da janela histórica e contenção de poda (máximo 2 anos), gravação contratual de previsões em `predictions.forecasts`, auditoria e observabilidade.
 - **Fora do escopo:** Redes neurais, treinamento ou inferência de machine learning, visualizações/dashboards/widgets, métricas de acurácia de modelo (POCID/POSID), serviços pagos de dados e exclusão física irreversível de dados brutos (`raw`).
 
 ---
@@ -15,7 +15,7 @@ Este componente tem como objetivo exclusivo a coleta, armazenamento, validação
 O banco de dados PostgreSQL é dividido em 6 schemas lógicos com responsabilidades bem delimitadas:
 
 ```
-[Fontes: Agro.br, CEPEA, BCB, NASA, B3]
+[Fontes: CEPEA, BCB PTAX, NASA POWER, B3, ICE (Yahoo Finance)]
                   │
                   ▼
          ┌───────────────────┐
@@ -68,7 +68,7 @@ O pipeline implementa o seguinte ciclo de vida estritamente orquestrado:
 8. **Carregar `staging`:** Carga controlada nas tabelas transitórias de staging.
 9. **Deduplicação e Upsert:** Stored procedures executam mesclagem idempotente em `core.market_daily` e `core.weather_daily` via `ON CONFLICT DO UPDATE` com `COALESCE`.
 10. **Recalcular variáveis derivadas:** Calcula métricas causais autorizadas (janelas móveis até a data de corte $t$, codificação cíclica seno/cosseno).
-11. **Criar versão imutável do dataset:** Registra snapshot em `features.dataset_versions` e popula `features.model_features` apenas com variáveis `KEEP` e `TARGET`.
+11. **Criar versão imutável do dataset:** Registra snapshot em `features.dataset_versions` e popula `features.model_features` apenas com as variáveis `KEEP` e os alvos derivados `y_*`; `preco_arabica` não é armazenado como feature.
 12. **Sinalizar prontidão:** Dispara trigger/evento em `audit.pending_events` indicando dataset pronto para consumo.
 13. **Disponibilizar contrato para previsão:** Expõe consulta e metadados para o componente externo.
 14. **Registrar previsões:** Recebe e valida inferências externas em `predictions.forecasts`.
@@ -83,24 +83,27 @@ O pipeline implementa o seguinte ciclo de vida estritamente orquestrado:
   - Clima: `(data_ref, regiao, variable_name)`
   - Reexecutar uma carga para a mesma data sobrescreve os mesmos registros com os dados mais recentes sem duplicar linhas.
 - **Bloqueio de Concorrência:**
-  - Uso de **PostgreSQL Advisory Locks** vinculados a uma chave inteira constante de aplicação:
-    `SELECT pg_try_advisory_lock(hashtext('pipeline_cafe_etl_lock'));`
+  - Uso de **PostgreSQL Advisory Locks** vinculados a uma chave inteira constante de aplicação (`ADVISORY_LOCK_KEY`, padrão `84729103`):
+    `SELECT pg_try_advisory_lock(84729103);`
   - Se outra instância tentar rodar ao mesmo tempo, a execução é abortada imediatamente com registro em log e saída segura com código de aviso, impedindo race conditions.
 
 ---
 
 ## 5. Diretrizes da Janela Histórica e Contenção de Poda
 
-### Inconsistência Documentada:
-O histórico do projeto referencia duas janelas temporais contraditórias:
+### Contexto Histórico e Decisão Consolidada:
+O documento de especificação referenciava duas janelas temporais contraditórias:
 - Janela de **9 anos** com poda máxima autorizada de **2 anos**.
-- Janela legada do SQLite com aproximadamente **1.096 dias** (~3 anos).
+- Mínimo de segurança de **1.096 dias** (~3 anos) exigido pela especificação.
+
+A entrega de 23/10/2026 resolveu o impasse na prática: `core` guarda 9 anos de histórico, a versão de treino começa em **2018-01-02** (primeiro ajuste publicado pela B3) e nenhuma poda foi aplicada. As regras abaixo continuam valendo para versões futuras.
 
 ### Regras de Implementação do Sistema:
 1. **Transparência Absoluta:** O sistema inicializa imprimindo em nível WARNING/INFO o comparativo entre a janela configurada (`HISTORICAL_YEARS=9`), o mínimo de segurança (`DATASET_MIN_DAYS=1096`) e os limites de data encontrados na base.
 2. **Trava em Produção:** Requer explicitamente `CONFIRM_HISTORICAL_WINDOW=true` nas variáveis de ambiente. Caso ausente em produção, o pipeline recusa prosseguir e instrui a confirmação.
 3. **Teto de Poda Máxima de 2 Anos:** A função de poda rejeita formalmente qualquer tentativa de descartar mais de 730 dias (2 anos) da janela móvel histórica.
 4. **Poda Estritamente Lógica:** A poda atua **apenas** nas visualizações e tabelas de features (`features.model_features`), aplicando flags de arquivamento (`is_pruned = TRUE`). Os dados em `raw` e `core` **nunca sofrem delete físico**.
+5. **Piso Fixo da Janela de Treino:** `DATASET_START_DATE` (no `.env` da entrega, `2018-01-02`) define o início das versões do dataset e vence o recuo de `HISTORICAL_YEARS` quando o corte é posterior. Se o piso configurado for posterior ao corte, o sistema registra um aviso e volta ao recuo histórico. A coleta e o `core` continuam guardando o histórico completo.
 
 ---
 
@@ -111,8 +114,8 @@ $$X_t \longrightarrow y_{t+h}$$
 
 - **Nenhuma informação contemporânea ou futura do alvo entra nas features do dia $t$:**
   `preco_arabica` contemporâneo de $t$ **nunca** é utilizado como feature preditiva para prever $t$. Apenas defasagens (lags passados: $t-1, t-2, \dots$), retornos passados e médias passadas são permitidos.
-- **Preenchimento Causal Estrito:** Séries que possuem divulgação defasada (como COT e ONI) só são propagadas a partir da sua `data_pub` real, impedindo que dados do fim do mês sejam projetados retrospectivamente para o início do mês antes da divulgação.
-- **Janelas Móveis Fechadas em $t$:** Todas as funções agregadas (médias móveis, desvios, somas de precipitação de 30 e 90 dias) usam janelas do tipo `ROWS BETWEEN 29 PRECEDING AND CURRENT ROW`, sem extrapolação para o futuro.
+- **Preenchimento Causal Estrito:** Séries com divulgação defasada são deslocadas pelo atraso de publicação antes de entrar nas features. No recorte atual, o clima do NASA POWER entra com 3 dias de atraso (5 para radiação) via `PUBLICATION_LAG_DAYS`; o preenchimento de lacunas é apenas para frente e limitado.
+- **Janelas Móveis Fechadas em $t$:** Todas as funções agregadas (médias móveis, desvios, somas de precipitação de 30 e 90 dias) são calculadas em Python (`src/transformations.py`) com janelas terminadas em $t$, sem extrapolação para o futuro.
 
 ---
 

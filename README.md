@@ -8,14 +8,14 @@
 
 ## O que este repositório faz
 
-Este componente é responsável exclusivamente por **coletar, armazenar, validar, transformar e versionar** os dados que alimentam um modelo de rede neural de previsão de preço do café. Ele **não treina nem executa o modelo** — apenas entrega a matriz de features pronta e registra as previsões geradas pelo time de ML.
+Este componente é responsável exclusivamente por **coletar, armazenar, validar, transformar e versionar** os dados que alimentam um modelo de rede neural de previsão de preço do café. Ele **não treina nem executa o modelo** — apenas entrega a matriz de features pronta e registra as previsões geradas pelo time de ML. O armazenamento é **exclusivamente PostgreSQL**: a base legada em SQLite foi absorvida pelo histórico do projeto e não é mais usada pelo pipeline.
 
 ---
 
 ## Arquitetura
 
 ```
-Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
+Fontes Externas (CEPEA, BCB PTAX, NASA POWER, B3, ICE)
         │
         ▼
   ┌──────────────┐    ┌──────────────┐
@@ -57,11 +57,10 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 
 ```
 .
-├── base/                        # Base legada SQLite + séries do CEPEA (pasta comum deste repositório)
+├── base/                        # Arquivo histórico + séries do CEPEA usadas pelo pipeline
 │   ├── dados_manuais/           # CSVs das séries do CEPEA (versionados; atualizados por src.cepea_series)
-│   ├── cafe_centro_oeste_mg.db  # Banco SQLite legado (não versionado)
-│   ├── build_base_cafe.py       # Script original de ETL do SQLite
-│   └── schema.sql               # Schema original SQLite
+│   ├── build_base_cafe.py       # Script legado (histórico; não usado pelo pipeline)
+│   └── schema.sql               # Schema do banco legado (histórico)
 │
 ├── migrations/                  # Scripts SQL versionados (001 → 006)
 ├── sql/                         # Fontes SQL (schemas, tabelas, índices, funções, triggers, seed)
@@ -71,7 +70,6 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   ├── db.py                    # Conexão PostgreSQL + advisory locks
 │   ├── logging_config.py        # Logging estruturado
 │   ├── migrator.py              # Executor de migrations versionadas
-│   ├── sqlite_migrator.py       # Migração SQLite legado → PostgreSQL
 │   ├── agrobr_client.py         # Contrato de coleta, fábrica e modo simulado
 │   ├── agrobr_real.py           # Modo real: CEPEA, BCB, B3 e NASA via agrobr; ICE via Yahoo
 │   ├── cepea_series.py          # Importa a planilha da série do CEPEA para os CSVs
@@ -86,7 +84,7 @@ Fontes Externas (CEPEA, BCB, NASA, B3, ICE, CFTC)
 │   └── integrations/
 │       └── django.py            # Adaptador de fronteira para Django/Celery (caixa preta)
 │
-├── tests/                       # Suite pytest (20 casos obrigatórios)
+├── tests/                       # Suite pytest (testes obrigatórios do documento)
 ├── jobs/                        # Jobs agendáveis e manuais
 │   ├── runner.py                # Linha de comando, corte e novas tentativas
 │   ├── apscheduler_runner.py    # Agendador diário (APScheduler) do modo --schedule
@@ -142,6 +140,7 @@ Parâmetros críticos do `.env`:
 | `SCHEDULER_JOB_ID` | (nome do job) | Id estável do job no agendador; só com um job por processo |
 | `MISFIRE_GRACE_SECONDS` | `3600` | Tolerância para um disparo atrasado ainda rodar uma vez |
 | `HISTORICAL_YEARS` | `9` | Janela histórica em anos |
+| `DATASET_START_DATE` | (vazio) | Piso fixo das versões do dataset; no `.env` deste projeto, `2018-01-02` (primeiro ajuste da B3) |
 | `MAX_PRUNE_YEARS` | `2` | Teto de poda lógica |
 | `AGROBR_MODE` | `simulated` | `real` (fontes de verdade) ou `simulated` (só para testar o pipeline) |
 | `CEPEA_AUTO_DOWNLOAD` | `false` | Tenta baixar a série do CEPEA a cada coleta real; o site recusa hoje (403) |
@@ -159,13 +158,7 @@ createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
 python -m src.migrator
 ```
 
-### 4. Migrar dados do SQLite legado
-
-```bash
-python -m src.sqlite_migrator
-```
-
-### 5. Executar a ingestão
+### 4. Executar a ingestão
 
 Com `AGROBR_MODE=real`, a primeira execução baixa todo o histórico da B3 e leva horas (veja [Fontes de Dados](#fontes-de-dados)). Para começar com uma janela menor, use `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD`.
 
@@ -203,7 +196,7 @@ run_ingestion(cutoff_date=date(2026, 1, 1), start_date=date(2025, 1, 1))
 
 Toda execução fica auditada em `audit.pipeline_runs` (status, contagens, erro) e em `audit.data_quality_checks` (uma linha por checagem).
 
-### 6. Construir as features
+### 5. Construir as features
 
 ```bash
 python -m src.feature_builder
@@ -213,7 +206,7 @@ Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grad
 
 Só entram as variáveis que o catálogo marca como `KEEP`. Uma variável `KEEP` sem dado em `core` (uma região ausente, por exemplo) interrompe a construção em vez de publicar uma coluna vazia.
 
-### 7. Publicar uma versão do dataset
+### 6. Publicar uma versão do dataset
 
 ```bash
 python -m src.dataset_versioning
@@ -241,7 +234,7 @@ with get_connection() as conn:
     conn.commit()
 ```
 
-### 8. Simular o consumo pelo modelo
+### 7. Simular o consumo pelo modelo
 
 ```bash
 python -m src.model_contract
@@ -249,7 +242,7 @@ python -m src.model_contract
 
 Lê a última versão válida, gera previsões fictícias para os horizontes configurados e as registra em `predictions.forecasts`. Não é o modelo: é um consumidor de exemplo que exercita o contrato de ponta a ponta.
 
-### 9. Agendar e operar os jobs
+### 8. Agendar e operar os jobs
 
 Cada job executa o ciclo completo — ingestão, features e versão do dataset — numa execução auditada, com um único lock para o ciclo inteiro.
 
@@ -289,7 +282,7 @@ ORDER BY started_at DESC
 LIMIT 10;
 ```
 
-### 10. Integrar com Django (opcional)
+### 9. Integrar com Django (opcional)
 
 O pipeline é uma **biblioteca externa**: o Django não ganha regra de negócio, não reimplementa o banco em ORM e não duplica o esquema. A fronteira é `src/integrations/django.py`, que monta a configuração canônica, abre a **própria** conexão psycopg do ciclo (o advisory lock nunca usa a conexão gerenciada pelo ciclo de requests do Django) e devolve o dicionário do ciclo (`run_id`, `status`, métricas):
 
@@ -305,7 +298,7 @@ Precedência de configuração, por campo: **explícita do chamador > Django > a
 
 Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `migrations/` (`python -m src.migrator`) — não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
 
-### 11. Podar a janela histórica
+### 10. Podar a janela histórica
 
 ```bash
 python -m src.pruning --days 365          # descarta o primeiro ano da última versão válida
@@ -315,7 +308,7 @@ python -m src.pruning --restore           # desfaz a poda
 
 A poda é lógica: marca `is_pruned = TRUE` nas linhas mais antigas de `features.model_features` e o consumidor deixa de recebê-las. Nada é apagado, e `raw` e `core` não são tocados. É recusada, sem alterar nada, se descartar mais de `MAX_PRUNE_YEARS` (730 dias, contando o que já foi podado na versão), se deixar menos de `DATASET_MIN_DAYS` dias ativos, ou sem `CONFIRM_HISTORICAL_WINDOW=true`.
 
-### 12. Executar os testes
+### 11. Executar os testes
 
 ```bash
 python -m pytest tests/ -v
@@ -400,7 +393,6 @@ python -m pytest tests/ -v --tb=short
 | Arquivo de Teste | Casos | Cobertura |
 |---|---|---|
 | `test_schema.py` | 3 | Schemas, tabelas obrigatórias e seed do catálogo |
-| `test_sqlite_migration.py` | 8 | Migração legado, paridade de contagem, spot-check de valor, idempotência |
 | `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
 | `test_cepea_series.py` | 30 | Leitura da planilha do CEPEA (datas dd/mm, números pt-BR), conferência contra o CSV existente, gravação com `.bak`, falhas que não tocam no arquivo |
 | `test_agrobr_real.py` | 31 | Coleta real com downloads substituídos: junção CEPEA manual + recente, PTAX, 1º vencimento da B3, cache e retomada, pregão em andamento da ICE, clima não publicado, falhas de rede (1 teste contra as fontes de verdade, desligado por padrão) |
@@ -409,7 +401,7 @@ python -m pytest tests/ -v --tb=short
 | `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
 | `test_no_future_leakage.py` | 10 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
 | `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
-| `test_dataset_versioning.py` | 20 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20) |
+| `test_dataset_versioning.py` | 22 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20), piso configurável da janela |
 | `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
 | `test_pipeline.py` | 11 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado, lock e conexão única do ciclo |
 | `test_jobs.py` | 29 | Horários e fuso, dia de corte de cada job, novas tentativas, códigos de saída e argumentos |
@@ -417,7 +409,7 @@ python -m pytest tests/ -v --tb=short
 | `test_django_integration.py` | 19 | Adaptador Django: precedência de configuração (explícita > Django > ambiente), validação de campos, conexão própria do ciclo, tradução de erros e leitura do Admin |
 | `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
 
-Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação; os 20 estão implementados.
+Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação. 19 continuam aplicáveis: o teste de migração do SQLite deixou de existir em 23/10/2026, quando o projeto passou a operar somente com PostgreSQL (a coleta real cobre todo o período que a base legada cobria).
 
 ---
 
@@ -445,6 +437,28 @@ E **devolve** as previsões, uma por horizonte:
 Uma previsão repetida para a mesma `(reference_date, horizon_days, model_version)` é atualizada, não duplicada.
 
 Ver [`docs/model_contract.md`](docs/model_contract.md) para o contrato completo.
+
+---
+
+## Banco de treino entregue
+
+O banco `cafe_previsao` foi carregado em 23/10/2026 com dados reais e uma versão congelada para treino:
+
+- **Versão `v1.0.0-20261022`** — início em **2018-01-02** (primeiro ajuste publicado pela B3), corte em 2026-10-22, **3.216 linhas**, 19 features e checksum SHA-256 conferido. Os alvos ficam nulos apenas na borda final (7, 15, 30 e 90 dias, conforme o horizonte); nenhuma feature tem nulo.
+- `core.market_daily`: 2.320 datas (2017-10-23 a 2026-10-22); `core.weather_daily`: 9.858 linhas (3 regiões × 3.286 dias).
+- `raw`: 80.186 observações (11.201 de mercado e 68.985 de clima), todas rastreáveis à execução de ingestão.
+- Qualidade: 54 checagens CRITICAL e 30 WARNING aprovadas; 7 linhas de precipitação do cerrado (dez/2025 a mar/2026, valores incompatíveis) ficaram em quarentena em `raw` e não entram em `core`.
+- `DATASET_START_DATE=2018-01-02` mantém esse piso nas próximas versões construídas pelos jobs; sem ele, o recuo de 9 anos incluiria dias sem B3.
+
+O dump compactado está em `backups/cafe_previsao_treino_20261023.dump` (formato custom do PostgreSQL, 2,6 MB) e foi validado restaurando em um banco temporário com contagens idênticas:
+
+```bash
+createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
+pg_restore -h 127.0.0.1 -p 5432 -U postgres -d cafe_previsao \
+  --no-owner --no-privileges backups/cafe_previsao_treino_20261023.dump
+```
+
+O banco anterior foi preservado como `cafe_previsao_backup_20261023`.
 
 ---
 

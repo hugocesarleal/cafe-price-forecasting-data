@@ -68,7 +68,7 @@ ORDER BY mf.data_ref ASC;
 ### 3.2 Metadados da Versão Fornecidos ao Modelo
 `src.model_contract.get_latest_dataset(conn)` devolve, da última versão válida:
 - `dataset_version_id` (UUID): Identificador único da versão imutável.
-- `version_tag` (VARCHAR): Ex. `'v1.0.0-20261003'`.
+- `version_tag` (VARCHAR): Ex. `'v1.0.0-20261022'`.
 - `cutoff_date` (DATE): Data limite dos dados disponíveis na versão ($t$).
 - `start_date` (DATE): Data inicial da janela com que a versão foi criada.
 - `row_count` (INTEGER): Quantidade de linhas na grade diária contínua.

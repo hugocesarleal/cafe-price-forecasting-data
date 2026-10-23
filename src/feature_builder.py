@@ -326,8 +326,15 @@ def _resolve_window(
 
     corte = cutoff_date or limites["ultimo"]
     if start_date is None:
-        configurado = (pd.Timestamp(corte) - pd.DateOffset(years=settings.HISTORICAL_YEARS)).date()
-        start_date = max(configurado, limites["primeiro"])
+        configurada = settings.DATASET_START_DATE
+        if configurada is not None and configurada > corte:
+            logger.warning(
+                "DATASET_START_DATE=%s é posterior ao corte %s; usando a janela "
+                "de HISTORICAL_YEARS=%d.", configurada, corte, settings.HISTORICAL_YEARS)
+            configurada = None
+        if configurada is None:
+            configurada = (pd.Timestamp(corte) - pd.DateOffset(years=settings.HISTORICAL_YEARS)).date()
+        start_date = max(configurada, limites["primeiro"])
     if start_date > corte:
         raise ValueError(f"Janela inválida: start_date={start_date} > cutoff_date={corte}")
 

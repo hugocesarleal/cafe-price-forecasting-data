@@ -2,7 +2,7 @@
 
 > Baseado no documento **prompt_desenvolvimento_mvp_cafe.pdf** (15 páginas), que define escopo, arquitetura, etapas de entrega e critérios de aceite. Este arquivo compara o estado atual do repositório com o que o documento exige.
 
-O documento define **8 etapas de entrega**. As **8 etapas estão implementadas** e a suíte completa roda verde contra PostgreSQL 16 (334 passaram, 1 desligado por padrão — o teste que acessa as fontes reais). Depois do MVP, o repositório recebeu a **integração com Django** e a **migração do agendador para APScheduler** — ver a seção correspondente antes das observações operacionais.
+O documento define **8 etapas de entrega**. As **8 etapas estão implementadas** e a suíte completa roda verde contra PostgreSQL 16 (330 passaram, 1 desligado por padrão — o teste que acessa as fontes reais). Depois do MVP, o repositório recebeu a **integração com Django** e a **migração do agendador para APScheduler** — ver a seção correspondente antes das observações operacionais.
 
 ---
 
@@ -28,10 +28,12 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 - [x] Parâmetros obrigatórios em `src/config.py`: `HISTORICAL_YEARS=9`, `MAX_PRUNE_YEARS=2`, `DATASET_MIN_DAYS=1096`, `FORECAST_HORIZONS=7,15,30,90`, `TIMEZONE=America/Sao_Paulo`, `UPDATE_TIME=00:00`
 - [x] Flag `CONFIRM_HISTORICAL_WINDOW` para a inconsistência 9 anos vs. ~1.096 dias exigida pelo documento
 
-## Etapa 3 — Migração SQLite → PostgreSQL ✅ CONCLUÍDA
+## Etapa 3 — Migração SQLite → PostgreSQL ✅ CONCLUÍDA (código removido em 23/10/2026)
 
-- [x] `src/sqlite_migrator.py` (migração do SQLite legado)
-- [x] `tests/test_sqlite_migration.py`
+- [x] `src/sqlite_migrator.py` (migração do SQLite legado) — removido em 23/10/2026
+- [x] `tests/test_sqlite_migration.py` — removido em 23/10/2026
+
+> A etapa foi entregue e validada. Em 23/10/2026 o projeto decidiu operar **somente com PostgreSQL**: a coleta real cobre todo o período da base legada, então o migrador (e o teste) saíram do repositório. O banco legado em `base/` fica apenas como arquivo histórico — não é usado pelo pipeline.
 
 ---
 
@@ -155,7 +157,7 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 
 ## Etapa 8 — Testes e README ✅ CONCLUÍDA (20 de 20 obrigatórios implementados)
 
-- [x] `test_schema.py` (1), `test_sqlite_migration.py` (2)
+- [x] `test_schema.py` (1) — o teste 2 (migração SQLite) não se aplica desde 23/10/2026, com o projeto somente PostgreSQL
 - [x] `test_idempotency.py` — carga idempotente (3), deduplicação (4), upsert (5)
 - [x] `test_validation.py` — arquivo com coluna ausente (6), arquivo com tipo inválido (7), valor fora do limite (8)
 - [x] `test_ingestion.py` — falha de conexão (9), retry (10), bloqueio de execução concorrente (11)
@@ -169,13 +171,13 @@ O documento define **8 etapas de entrega**. As **8 etapas estão implementadas**
 - [x] `docs/runbook.md` — operação, recuperação e reprocessamento
 - [x] README com configuração, execução de cada etapa, jobs, poda e testes
 
-> **Estado da verificação**: a suíte completa já foi executada contra PostgreSQL 16 e **passa** — 334 testes passaram e 1 ficou desligado por padrão (o que acessa as fontes reais; ligue com `RUN_LIVE_TESTS=1`). Isso cobriu ingestão, idempotência, schema e migração, features, versionamento, contrato, orquestrador, poda, jobs, agendador e a fronteira Django.
+> **Estado da verificação**: a suíte completa já foi executada contra PostgreSQL 16 e **passa** — 330 testes passaram e 1 ficou desligado por padrão (o que acessa as fontes reais; ligue com `RUN_LIVE_TESTS=1`). Isso cobriu ingestão, idempotência, schema, features, versionamento, contrato, orquestrador, poda, jobs, agendador e a fronteira Django.
 >
 > Os testes 9 a 11 e a suíte da etapa 4 também foram executados nessa rodada; a mudança da etapa 7 na detecção de origem inalterada está coberta.
 
 > **Decisões da poda que valem revisão**:
 > - A poda vale para uma versão; versões novas nascem com a janela inteira.
-> - O mínimo `DATASET_MIN_DAYS` como condição para podar é interpretação minha de "mínimo de segurança": com a base legada de ~1.096 dias, qualquer poda é recusada.
+> - O mínimo `DATASET_MIN_DAYS` como condição para podar é interpretação minha de "mínimo de segurança": na versão entregue, com 3.216 dias, a poda é possível até o teto de 2 anos; o mínimo continua barrando reduções que deixariam a janela curta demais.
 > - `CONFIRM_HISTORICAL_WINDOW` trava a poda, não o pipeline inteiro. O documento fala em recusar a execução "em produção", mas não há hoje uma configuração que diga qual ambiente é produção, e o padrão da flag em `src/config.py` é `true`.
 
 ## Modo real de coleta ✅ IMPLEMENTADO (fora das 8 etapas)
@@ -229,24 +231,47 @@ Trabalho executado depois das 8 etapas, a pedido da equipe: chamar o pipeline a 
 > - A fronteira Django não expõe `ADVISORY_LOCK_KEY` como injetável de propósito: o lock é o mecanismo de exclusão mútua entre processos e precisa valer o mesmo para todos.
 > - Não há modelagem Django do banco: o modelo do Admin é `managed = False` e o esquema continua sendo criado somente pelas migrations SQL de `migrations/`.
 
+## Banco final de treino (23/10/2026)
+
+Banco `cafe_previsao` (PostgreSQL 16 local), criado do zero pelas migrations e carregado com dados reais. O banco anterior foi renomeado para `cafe_previsao_backup_20261023`, sem perda de dados.
+
+| Item | Resultado |
+|---|---|
+| Versão de treino | `v1.0.0-20261022` (`a936545b-8f84-4d70-bea3-59ae3d16c419`) |
+| Janela | 2018-01-02 a 2026-10-22 (3.216 dias) |
+| Linhas / features | 3.216 linhas, 19 features, 4 alvos |
+| Checksum SHA-256 | `7412eb66d95b7cee02269854cc57c98a86a084b2ed648c90841aacb9af897741` (conferido) |
+| `core.market_daily` | 2.320 datas (2017-10-23 a 2026-10-22): arábica e robusta 2.244, PTAX 2.259, B3 2.189, ICE 2.265; sem duplicatas |
+| `core.weather_daily` | 9.858 linhas (3 regiões × 3.286 dias, 2017-10-22 a 2026-10-20) |
+| `raw` | 80.186 observações (11.201 mercado + 68.985 clima), ligadas à execução `0afc7f32-ccf3-4365-a759-773e6508d4f6` (SUCCESS) |
+| Qualidade | 54 CRITICAL + 30 WARNING, todas aprovadas; nenhuma previsão ou dado de teste |
+| Dump | `backups/cafe_previsao_treino_20261023.dump` (custom, 2,6 MB), restaurado em banco temporário com contagens idênticas |
+
+- **Nulos nos alvos**: `y_7d` 7, `y_15d` 15, `y_30d` 30 e `y_90d` 90 — exatamente a borda final de cada horizonte. As 19 features não têm nenhum nulo na versão.
+- **Quarentena**: 7 leituras de precipitação do cerrado (02/12/2025 a 07/03/2026, entre 626 e 931 mm/dia) foram reprovadas pela validação e ficaram em `raw.weather_observations` com `status = INVALID`; não entram em `core` e os acumulados usam apenas os dias válidos.
+- **Radiação**: a NASA POWER veio sem radiação em 7 datas de set/out 2026 (21 linhas, 3 regiões). O feature builder preenche causalmente dentro do limite e as features dessa coluna ficaram sem nulos.
+- **Piso da janela**: `DATASET_START_DATE=2018-01-02` no `.env` e no `.env.example`. Os jobs seguintes mantêm o piso; sem ele, o recuo de `HISTORICAL_YEARS=9` incluiria dias anteriores ao primeiro ajuste da B3.
+- **Consumo**: usar `src.model_contract.load_features`/`get_latest_dataset` (consulta padrão da última versão válida). A versão de treino é a única versão do banco.
+- **Restauração**: `pg_restore --no-owner --no-privileges` no dump, com o banco criado vazio; ver README/runbook.
+
 ## Observações operacionais
 
-1. **O que falta para fechar**: executar `python -m pytest tests/ -v` com PostgreSQL disponível e resolver o que aparecer.
-2. **Pasta `base/`**: faz parte deste repositório desde 07/10/2026 (antes era um vínculo de submódulo sem `.gitmodules`, e o conteúdo não chegava a quem clonava). São versionados o script legado, o schema do SQLite, o README e os CSVs do CEPEA em `base/dados_manuais/`. O SQLite (`*.db`), `base_modelo.csv`, as auditorias e as planilhas `.xls` ficam fora, pelo `.gitignore`.
-3. **Decisão de negócio pendente**: o documento proíbe assumir silenciosamente a janela histórica (9 anos vs. ~1.096 dias). A confirmação da janela **deve ser validada pela equipe antes da execução em produção**.
+1. **O que falta para fechar**: nada bloqueante. A suíte está verde contra PostgreSQL 16 e o banco de treino foi gerado em 23/10/2026 (ver "Banco final de treino" acima).
+2. **Pasta `base/`**: faz parte deste repositório desde 07/10/2026 (antes era um vínculo de submódulo sem `.gitmodules`, e o conteúdo não chegava a quem clonava). São versionados o script legado, o schema do banco legado, o README e os CSVs do CEPEA em `base/dados_manuais/` (estes últimos são usados pelo pipeline). O banco legado (`*.db`), `base_modelo.csv`, as auditorias e as planilhas `.xls` ficam fora, pelo `.gitignore`.
+3. **Janela histórica**: decidida em 23/10/2026 — `core` cobre 9 anos (desde 2017-10-23); a versão de treino começa em **2018-01-02**, primeiro dia com dados da B3. `CONFIRM_HISTORICAL_WINDOW=true` segue obrigatório.
 4. **Fora do escopo** (não implementar aqui): telas, widgets, rede neural, treinamento, POCID/POSID, serviços pagos.
 
 ## Critérios de aceite do documento
 
-Legenda: ✅ implementado e verificado pela suíte contra PostgreSQL · ❌ não atendido.
+Legenda: ✅ implementado e verificado pela suíte contra PostgreSQL · ❌ não atendido · ➖ não se aplica.
 
 | Critério | Estado | Onde |
 |---|---|---|
 | PostgreSQL sobe localmente | ✅ | `docker-compose.yml`; suíte executada contra PostgreSQL 16 |
 | Migrations criam tudo | ✅ | `src/migrator.py`, `test_schema.py` |
-| SQLite migra para base de teste | ✅ | `src/sqlite_migrator.py`, `test_sqlite_migration.py` |
+| SQLite migra para base de teste | ➖ | removido em 23/10/2026: projeto somente PostgreSQL; a coleta real cobre o período da base legada |
 | Pipeline baixa ou simula Agro.br | ✅ | os dois modos; a coleta real foi executada contra as seis fontes e é coberta por `test_agrobr_real.py` |
-| Mesma carga roda 2× sem duplicidade | ✅ | `test_idempotency.py`; ressalva: `src.sqlite_migrator` duplica `raw` se rodar 2× |
+| Mesma carga roda 2× sem duplicidade | ✅ | `test_idempotency.py` |
 | Variáveis geradas com nomes/tipos documentados | ✅ | `docs/data_dictionary.md`, `test_feature_catalog.py` |
 | Excluídas fora da consulta padrão | ✅ | `test_feature_catalog.py` (15) |
 | Brutos rastreáveis | ✅ | `raw.*` com `file_id`, `pipeline_run_id`, hash |
@@ -264,10 +289,10 @@ Legenda: ✅ implementado e verificado pela suíte contra PostgreSQL · ❌ não
 
 - **Histórico do CEPEA**: atualizado em 07/10/2026 pelas planilhas do site, importadas com `python -m src.cepea_series --importar` — arábica de 02/09/1996 a 06/10/2026 (7.495 cotações) e robusta de 08/11/2001 a 06/10/2026 (6.161). Precisa ser repetido periodicamente; a coleta avisa quando abrir um buraco.
 - **Acesso automático ao CEPEA**: recusado pelo site (HTTP 403 em 07/10/2026; o `robots.txt` de 03/09/2026 declara o bloqueio de acesso automatizado). Se for necessário, depende de autorização do CEPEA. O complemento recente via `agrobr` também depende do site e pode passar a falhar; nesse caso a coleta segue só com o CSV.
-- **Primeira carga real**: 9 anos de ajustes da B3 levam mais de 2 horas; ainda não foi feita.
+- **Primeira carga real**: concluída em 23/10/2026; a B3 2026 foi rebaixada com o parser corrigido e a versão de treino começa em 2018-01-02.
 - **Bancos separados para simulado e real**: nada impede hoje uma ingestão simulada de gravar por cima de dados reais.
 - **Job de pós-fechamento e a B3**: às 19:00 o arquivo de ajustes do dia pode ainda não estar publicado; a versão gerada repete o ajuste da véspera para aquele dia.
-- **Janela histórica**: 9 anos contra ~1.096 dias; decisão da equipe.
-- **SQLite legado fora do repositório**: `base/cafe_centro_oeste_mg.db` não é versionado. `src.sqlite_migrator` e `test_sqlite_migration.py` dependem dele; no modo real ele não é necessário.
+- **Janela histórica**: decidida em 23/10/2026 (9 anos de `core`, versão a partir de 2018-01-02 por limite da B3).
+- **SQLite legado**: migrador e teste removidos em 23/10/2026; `base/cafe_centro_oeste_mg.db` fica só como arquivo local histórico, fora do repositório.
 - **Imutabilidade das versões no banco**: hoje garantida pelo código e conferível por checksum, sem trigger.
 - **Liberação do lock na ingestão após erro SQL**: a liberação roda antes do rollback; visto na leitura do código, não reproduzido.

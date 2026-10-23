@@ -1,6 +1,8 @@
-# Base de dados para previsão de preço do café
+# Base de dados para previsão de preço do café — protótipo histórico
 
-Pipeline de ETL que monta um banco SQLite com granularidade diária, reunindo as variáveis que influenciam o preço do café arábica no Brasil.
+> **Arquivo histórico, não é a arquitetura vigente.** Este README descreve o protótipo original em SQLite (`build_base_cafe.py`), mantido apenas como registro da fase de exploração. O pipeline atual usa **exclusivamente PostgreSQL** e está documentado no `README.md` da raiz e em `docs/architecture.md`; nenhum comando ou tabela descrito aqui é executado pela versão atual.
+
+Pipeline de ETL que montava um banco SQLite com granularidade diária, reunindo as variáveis que influenciam o preço do café arábica no Brasil.
 
 **Recorte geográfico:** região de Bambuí/MG (Centro-Oeste Mineiro)
 **Variável-alvo:** Indicador CEPEA/ESALQ Café Arábica (R$/saca 60 kg)
@@ -11,7 +13,7 @@ Pipeline de ETL que monta um banco SQLite com granularidade diária, reunindo as
 
 ## 1. O que foi feito
 
-O script `build_base_cafe.py` coleta dados de **9 fontes públicas**, normaliza tudo para um calendário diário contínuo e grava uma tabela em formato largo (uma linha por dia, uma coluna por variável), pronta para alimentar um modelo de séries temporais.
+O script `build_base_cafe.py` coletava dados de **9 fontes públicas**, normalizava tudo para um calendário diário contínuo e gravava uma tabela em formato largo (uma linha por dia, uma coluna por variável), pronta para alimentar um modelo de séries temporais.
 
 O trabalho resolve três problemas que costumam consumir a maior parte do tempo neste tipo de projeto:
 

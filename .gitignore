@@ -32,6 +32,9 @@ pip-selfcheck.json
 pg_test_cluster/
 pg_test.log
 
+# Dumps locais do banco de treino
+backups/
+
 # ============================================================
 # Artefatos de Build / Dados Gerados
 # ============================================================

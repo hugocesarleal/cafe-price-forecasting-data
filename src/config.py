@@ -9,7 +9,7 @@ processo no início, com mensagem que diz qual parâmetro corrigir.
 """
 
 import os
-from datetime import time
+from datetime import date, time
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -50,6 +50,9 @@ class Settings(BaseSettings):
 
     # Janela e Poda
     HISTORICAL_YEARS: int = 9
+    # Início fixo das versões de treino (vazio = recuo de HISTORICAL_YEARS).
+    # Usado quando a origem não tem dado desde o início da janela histórica.
+    DATASET_START_DATE: Optional[date] = None
     MAX_PRUNE_YEARS: int = 2
     DATASET_MIN_DAYS: int = 1096
     CONFIRM_HISTORICAL_WINDOW: bool = True
@@ -86,7 +89,6 @@ class Settings(BaseSettings):
     COLLECTION_WINDOW_DAYS: int = 0
 
     # Caminhos Locais
-    SQLITE_SOURCE_PATH: str = "base/cafe_centro_oeste_mg.db"
     MANUAL_DATA_DIR: str = "base/dados_manuais"
     LOG_LEVEL: str = "INFO"
 

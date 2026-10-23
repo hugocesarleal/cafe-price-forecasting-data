@@ -8,11 +8,14 @@ criadas numa transação que nunca é confirmada, então nenhum outro consumidor
 banco chega a vê-las.
 """
 
+from datetime import date
+
 import numpy as np
 import pytest
 
 from conftest import ESCALAS, JOB_NAME_TESTES, TAG_VERSAO_TESTE, matriz_sintetica
 from src import dataset_versioning as dv
+from src import feature_builder as fb
 from src.feature_builder import build_feature_matrix, storage_frame
 
 
@@ -306,3 +309,21 @@ def test_invalidar_versao_devolve_a_anterior_e_preserva_as_linhas(ingest_conn, c
     assert linhas_da_versao(ingest_conn, segunda.dataset_version_id) == segunda.row_count
     with pytest.raises(ValueError):
         dv.invalidate_dataset_version(ingest_conn, segunda.dataset_version_id, "de novo")
+
+
+def test_inicio_do_dataset_pode_ser_fixado(ingest_conn, core_no_banco, monkeypatch):
+    monkeypatch.setattr(fb.settings, "DATASET_START_DATE", date(1990, 3, 1))
+
+    inicio, corte = fb._resolve_window(ingest_conn, core_no_banco["corte"], None)
+
+    assert inicio == date(1990, 3, 1)
+    assert corte == core_no_banco["corte"]
+
+
+def test_inicio_fixado_posterior_ao_corte_usa_recuo_historico(
+        ingest_conn, core_no_banco, monkeypatch):
+    monkeypatch.setattr(fb.settings, "DATASET_START_DATE", date(2030, 1, 1))
+
+    inicio, _ = fb._resolve_window(ingest_conn, core_no_banco["corte"], None)
+
+    assert inicio == date(1990, 1, 1)

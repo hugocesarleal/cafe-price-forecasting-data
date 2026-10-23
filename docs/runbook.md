@@ -265,7 +265,7 @@ A poda é recusada, sem alterar nada, quando:
 
 A poda vale para a versão em que foi aplicada. Uma versão nova nasce com a janela inteira e, se a poda deve continuar, precisa ser aplicada de novo.
 
-> **Janela histórica**: o projeto traz duas referências que não fecham entre si — 9 anos de janela com poda de até 2, e a base legada de ~1.096 dias. Com a base legada, qualquer poda é recusada pelo mínimo de segurança. A equipe precisa decidir qual janela vale antes de podar em produção.
+> **Janela histórica**: decisão de 23/10/2026 — `core` guarda 9 anos (desde 2017-10-23) e a versão de treino começa em **2018-01-02**, primeiro dia com ajuste da B3. Nenhuma poda foi aplicada na versão entregue; se for aplicar uma, lembre que o mínimo de segurança de `DATASET_MIN_DAYS=1096` continua valendo.
 
 ---
 
@@ -284,6 +284,8 @@ No `.env`, defina `AGROBR_MODE=real`. Então:
 python -m jobs.run_on_demand      # primeira carga e primeira versão
 ```
 
+Com `DATASET_START_DATE=2018-01-02` (valor usado na entrega), a versão começa no primeiro dia com ajuste da B3, mesmo que `core` tenha datas anteriores. Sem o piso, a versão recua os `HISTORICAL_YEARS` completos e as primeiras linhas ficam sem `b3_cafe_ajuste`.
+
 A primeira carga baixa um arquivo da B3 por pregão: cerca de 4 segundos cada, **mais de 2 horas para os 9 anos**. O log mostra o progresso a cada 20 pregões. Pode interromper: o que já foi baixado está em `COLLECTION_CACHE_DIR` (`.cache/coleta/b3_icf_ajustes.csv`) e a execução seguinte continua dali. As outras fontes levam cerca de um minuto.
 
 Para começar com menos histórico e completar depois:
@@ -296,7 +298,28 @@ Depois da primeira carga, defina `COLLECTION_WINDOW_DAYS=45` no `.env`. Sem isso
 
 > **Use bancos separados para os modos simulado e real.** A publicação em `core` é por upsert, então uma ingestão simulada grava por cima dos dados reais das mesmas datas, e um banco que já recebeu dados simulados continua com eles onde a coleta real não tiver valor (os últimos dias de clima, por exemplo). Nada no código impede a mistura.
 
-`src.sqlite_migrator` (base legada do SQLite) não é necessário no modo real: a coleta cobre o mesmo período e mais. Se usá-lo, rode uma vez só — ele grava em `raw` a cada execução e duplica as linhas legadas.
+O projeto opera **somente com PostgreSQL**: a base legada em SQLite foi absorvida pelo histórico e não é mais usada pelo pipeline. O banco legado em `base/` fica apenas como arquivo histórico; a coleta real cobre todo o período que ele cobria.
+
+### Restaurar o dump do banco de treino
+
+O dump entregue em 23/10/2026 (`backups/cafe_previsao_treino_20261023.dump`, formato custom, 2,6 MB) contém o banco completo: schemas, migrations aplicadas, `raw`, `core` e a versão `v1.0.0-20261022`.
+
+```bash
+createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
+pg_restore -h 127.0.0.1 -p 5432 -U postgres -d cafe_previsao \
+  --no-owner --no-privileges backups/cafe_previsao_treino_20261023.dump
+```
+
+Confira depois:
+
+```sql
+SELECT version_tag, start_date, cutoff_date, row_count, feature_count, is_valid
+FROM features.dataset_versions;
+SELECT count(*) FROM core.market_daily;    -- 2320
+SELECT count(*) FROM features.model_features;  -- 3216
+```
+
+O banco anterior à entrega está preservado como `cafe_previsao_backup_20261023`.
 
 ### Histórico do CEPEA
 

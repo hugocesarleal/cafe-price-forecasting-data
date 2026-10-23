@@ -40,6 +40,9 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 | `tmin_min_30d_cerrado`| clima | Calculada | °C | FALSE | FALSE | TRUE | `KEEP` | Mínima absoluta dos últimos 30 dias no Cerrado Mineiro. |
 | `dias_quente_30d_sulmg`| clima | Calculada | dias | FALSE | FALSE | TRUE | `KEEP` | Contagem de dias com Tmax > 32°C nos últimos 30 dias no Sul de Minas. |
 | `dias_quente_30d_cerrado`| clima | Calculada | dias | FALSE | FALSE | TRUE | `KEEP` | Contagem de dias com Tmax > 32°C nos últimos 30 dias no Cerrado. |
+| `temp_min` | clima | NASA POWER | °C | TRUE | TRUE | FALSE | `INTERNAL_INPUT` | Insumo diário por região para `tmin_min_30d_*`. |
+| `temp_max` | clima | NASA POWER | °C | TRUE | TRUE | FALSE | `INTERNAL_INPUT` | Insumo diário por região para `dias_quente_30d_*`. |
+| `precip_mm` | clima | NASA POWER | mm | TRUE | TRUE | FALSE | `INTERNAL_INPUT` | Insumo diário por região para `precip_30d_*` e `precip_90d_*`. |
 | `sin_ano` | calendario | Calculada | - | FALSE | FALSE | TRUE | `KEEP` | Codificação cíclica da sazonalidade: sin(2*pi*dia_ano/365.25). |
 | `cos_ano` | calendario | Calculada | - | FALSE | FALSE | TRUE | `KEEP` | Codificação cíclica da sazonalidade: cos(2*pi*dia_ano/365.25). |
 | `precip_mm_bambui` | clima | NASA POWER | mm | TRUE | FALSE | FALSE | `DROP` | Ponto hiperlocal com menor relevância nacional agregada. Mantido em raw/core. |
@@ -90,6 +93,8 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 | `fase_fenologica` | safra | Manual | categorico | FALSE | FALSE | FALSE | `DROP` | Descartada inicialmente. |
 | `risco_geada` | clima | Calculada | booleano | FALSE | FALSE | FALSE | `DROP` | Descartada inicialmente. |
 
+**Total semeado em `features.variable_catalog`:** 70 variáveis — 1 `TARGET`, 19 `KEEP`, 3 `INTERNAL_INPUT` e 47 `DROP`. Apenas as 19 `KEEP` são publicadas como features; os 4 alvos `y_*` são derivados de `preco_arabica` e gravados em `features.model_features`.
+
 ---
 
 ## 2. Modelagem Detalhada das Tabelas PostgreSQL
@@ -98,14 +103,15 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 - **`raw.ingestion_files`**:
   - `file_id` (UUID, PK)
   - `pipeline_run_id` (UUID, FK -> audit.pipeline_runs)
-  - `source_name` (VARCHAR(50), ex: 'agrobr_cepea', 'agrobr_bcb', 'nasa_power')
+  - `source_name` (VARCHAR(60), ex: 'CEPEA/ESALQ', 'BCB PTAX', 'B3', 'ICE US', 'NASA POWER')
   - `source_url` (VARCHAR(500))
   - `git_commit` (VARCHAR(64), quando aplicável)
   - `file_name` (VARCHAR(255))
   - `file_hash` (CHAR(64) SHA-256)
-  - `collected_at` (TIMESTAMPTZ)
+  - `collected_at` (TIMESTAMPTZ DEFAULT clock_timestamp())
   - `row_count` (INTEGER)
   - `has_changed` (BOOLEAN)
+  - `created_at` (TIMESTAMPTZ DEFAULT clock_timestamp())
 - **`raw.market_observations`**:
   - `id` (BIGSERIAL, PK)
   - `file_id` (UUID, FK -> raw.ingestion_files)
@@ -119,6 +125,7 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
   - `unit` (VARCHAR(30))
   - `load_version` (VARCHAR(50))
   - `validation_status` (VARCHAR(20) DEFAULT 'PENDING')
+  - `created_at` (TIMESTAMPTZ DEFAULT clock_timestamp())
 - **`raw.weather_observations`**:
   - `id` (BIGSERIAL, PK)
   - `file_id` (UUID, FK -> raw.ingestion_files)
@@ -132,10 +139,11 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
   - `unit` (VARCHAR(30))
   - `load_version` (VARCHAR(50))
   - `validation_status` (VARCHAR(20) DEFAULT 'PENDING')
+  - `created_at` (TIMESTAMPTZ DEFAULT clock_timestamp())
 
 ### Schema: `staging`
-- **`staging.market_observations`**: Estrutura espelho com índices de carga rápida e tipagem normalizada. Truncada ou isolada por `pipeline_run_id`.
-- **`staging.weather_observations`**: Estrutura espelho para observações climáticas limpas antes do upsert no core.
+- **`staging.market_observations`**: Estrutura espelho com índices de carga rápida e tipagem normalizada. Truncada ou isolada por `pipeline_run_id` (NOT NULL, sem FK).
+- **`staging.weather_observations`**: Estrutura espelho para observações climáticas limpas antes do upsert no core; mesmas colunas da tabela de mercado, com `region` (VARCHAR(30) NOT NULL).
 
 ### Schema: `core`
 - **`core.market_daily`**:
@@ -165,7 +173,7 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 - **`features.variable_catalog`**: Conforme seção 1 deste documento.
 - **`features.dataset_versions`**:
   - `dataset_version_id` (UUID, PK)
-  - `version_tag` (VARCHAR(50) UNIQUE, ex: 'v1.0.0-20261003')
+  - `version_tag` (VARCHAR(50) UNIQUE, ex: 'v1.0.0-20261022')
   - `cutoff_date` (DATE)
   - `start_date` (DATE)
   - `row_count` (INTEGER)
@@ -177,7 +185,8 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
   - `id` (BIGSERIAL, PK)
   - `dataset_version_id` (UUID, FK -> features.dataset_versions)
   - `data_ref` (DATE)
-  - Variáveis KEEP e TARGET (somente as autorizadas pelo catálogo)
+  - As **19 variáveis `KEEP`** do catálogo (clima, mercado e calendário), gravadas como colunas explícitas.
+  - `preco_arabica` **não** é armazenado aqui: a variável `TARGET` é representada apenas pelos alvos futuros `y_*`.
   - `y_7d` (NUMERIC(10, 2))
   - `y_15d` (NUMERIC(10, 2))
   - `y_30d` (NUMERIC(10, 2))
@@ -194,7 +203,7 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
   - `horizon_days` (INTEGER NOT NULL CHECK (horizon_days IN (7, 15, 30, 90)))
   - `predicted_value` (NUMERIC(10, 2) NOT NULL)
   - `dataset_version_id` (UUID NOT NULL, FK -> features.dataset_versions)
-  - `model_version` (VARCHAR(50) NOT NULL)
+  - `model_version` (VARCHAR(60) NOT NULL)
   - `generated_at` (TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())
   - `pipeline_run_id` (UUID NOT NULL, FK -> audit.pipeline_runs)
   - `forecast_status` (VARCHAR(30) DEFAULT 'ACTIVE')
