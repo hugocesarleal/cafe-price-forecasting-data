@@ -176,6 +176,33 @@ class RealAgrobrClient(AgrobrClient):
         from agrobr.b3 import api as b3_api
         from agrobr.exceptions import SourceUnavailableError
 
+        # Garante recover=True no etree.iterparse da B3 para contornar XMLs históricos com tags desalinhadas
+        try:
+            import agrobr.b3.parser as _b3_parser
+            from lxml import etree as _etree
+
+            if not getattr(_b3_parser, "_is_patched_recover", False):
+                def _parse_bvmf_xml_recover(xml_stream):
+                    records = []
+                    tag_pric_rpt = f"{{{_b3_parser._NS}}}PricRpt"
+                    for _event, elem in _etree.iterparse(xml_stream, events=("end",), tag=tag_pric_rpt, recover=True):
+                        rec = _b3_parser._extract_record(elem)
+                        if rec is not None:
+                            records.append(rec)
+                        elem.clear()
+                        parent = elem.getparent()
+                        if parent is not None:
+                            grandparent = parent.getparent()
+                            if grandparent is not None:
+                                while parent.getprevious() is not None:
+                                    grandparent.remove(grandparent[0])
+                    return records
+
+                _b3_parser._parse_bvmf_xml = _parse_bvmf_xml_recover
+                _b3_parser._is_patched_recover = True
+        except Exception:
+            pass
+
         async def baixar_todos() -> List[Optional[pd.DataFrame]]:
             limite = asyncio.Semaphore(B3_CONCURRENCY)
 
@@ -185,6 +212,10 @@ class RealAgrobrClient(AgrobrClient):
                         return await b3_api.ajustes(data=dia, contrato=B3_CONTRACT)
                     except SourceUnavailableError:
                         return None  # feriado, ou pregão ainda não publicado
+                    except Exception as exc:
+                        logger.warning("B3: falha ao baixar/processar ajustes de %s (%s: %s). Ignorando pregão.",
+                                       dia, type(exc).__name__, exc)
+                        return None
 
             return await asyncio.gather(*(baixar(d) for d in dias))
 
