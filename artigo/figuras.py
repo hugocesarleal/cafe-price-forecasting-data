@@ -119,21 +119,21 @@ def fig_mapa_calor(b, pasta):
              "radiacao_mj_cerrado", "temp_media_cerrado", "dias_quente_30d_sulmg", "dias_quente_30d_cerrado"]
     b["cot_mm_net_pct_oi"] = b["cot_mm_net"] / b["cot_open_interest"]
     cm = b[ordem].corr()
-    # Formato compacto: a figura divide a página com o gráfico de intervalos.
-    fig, ax = plt.subplots(figsize=(4.7, 4.2))
-    im = ax.imshow(cm.values, cmap="RdBu_r", vmin=-1, vmax=1)
-    ax.set_xticks(range(len(ordem)))
-    ax.set_yticks(range(len(ordem)))
-    ax.set_xticklabels(ordem, rotation=90, fontfamily="monospace", fontsize=6.3)
-    ax.set_yticklabels(ordem, fontfamily="monospace", fontsize=6.3)
+    # Largura de uma coluna: só o triângulo inferior (a matriz é simétrica), sem a diagonal.
+    tri = np.where(np.tril(np.ones(cm.shape, dtype=bool), k=-1), cm.values, np.nan)
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad("white")
+    fig, ax = plt.subplots(figsize=(2.5, 2.8))
+    im = ax.imshow(tri, cmap=cmap, vmin=-1, vmax=1)
+    ax.set_xticks(range(len(ordem) - 1))
+    ax.set_yticks(range(1, len(ordem)))
+    ax.set_xticklabels(ordem[:-1], rotation=90, fontfamily="monospace", fontsize=5.5)
+    ax.set_yticklabels(ordem[1:], fontfamily="monospace", fontsize=5.5)
+    ax.set_xlim(-0.5, len(ordem) - 1.5)
+    ax.set_ylim(len(ordem) - 0.5, 0.5)
     ax.spines[:].set_visible(False)
-    for i in range(len(ordem)):
-        for j in range(len(ordem)):
-            v = cm.values[i, j]
-            if i != j and abs(v) >= 0.5:
-                ax.text(j, i, br(v, 1), ha="center", va="center", fontsize=5.3,
-                        color="white" if abs(v) > 0.75 else "black")
-    cb = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02, format=fmt(2))
+    ax.tick_params(length=0)
+    cb = fig.colorbar(im, ax=ax, fraction=0.045, pad=0.02, format=fmt(1))
     cb.set_label("correlação de Pearson")
     salvar(fig, pasta, "fig4_heatmap.pdf")
 
@@ -141,8 +141,8 @@ def fig_mapa_calor(b, pasta):
 def fig_intervalos(R, pasta):
     V = R["vars"]
     nomes = sorted(V, key=lambda k: V[k]["r"])
-    # Formato compacto: divide a página com o mapa de calor.
-    fig, ax = plt.subplots(figsize=(5.4, 5.4))
+    # Largura de uma coluna, alta: uma linha por variável.
+    fig, ax = plt.subplots(figsize=(2.45, 5.6))
     for i, k in enumerate(nomes):
         s = V[k]
         cor = CINZA if s["cobre_zero"] else VERDE
@@ -154,10 +154,12 @@ def fig_intervalos(R, pasta):
     ax.set_yticks(range(len(nomes)))
     ax.set_yticklabels([f"{k}  [{V[k]['classe']}{'*' if k == 'cot_mm_net_pct_oi' else ''}]" for k in nomes],
                        fontfamily="monospace", fontsize=5.6)
+    ax.set_ylim(-0.7, len(nomes) - 0.3)
     ax.axvline(0, color="black", lw=0.6)
     ax.set_xlim(-1, 1)
-    ax.set_xlabel("correlação com o log-retorno acumulado dos 91 dias seguintes")
-    ax.xaxis.set_major_formatter(fmt(2))
+    ax.set_xlabel("correlação com o retorno dos 91 dias seguintes")
+    ax.set_xticks([-1, -0.5, 0, 0.5, 1])
+    ax.xaxis.set_major_formatter(fmt(1))
     ax.grid(axis="x", color="#e5e5e5", lw=0.5)
     leg = [Line2D([], [], color=CINZA, lw=1.2, label="IC95% cobre zero"),
            Line2D([], [], color=VERDE, lw=1.2, label="IC95% exclui zero"),
@@ -165,7 +167,8 @@ def fig_intervalos(R, pasta):
            Line2D([], [], marker="v", mfc="none", mec=LARANJA, ls="", ms=2.6, label="1º terço"),
            Line2D([], [], marker="s", mfc="none", mec=LARANJA, ls="", ms=2.6, label="2º terço"),
            Line2D([], [], marker="^", mfc="none", mec=LARANJA, ls="", ms=2.6, label="3º terço")]
-    ax.legend(handles=leg, loc="lower right", frameon=True, framealpha=1, edgecolor="#cccccc", fontsize=6)
+    ax.legend(handles=leg, loc="upper center", bbox_to_anchor=(0.3, -0.06), ncol=2, frameon=False,
+              fontsize=6, handlelength=1.4, columnspacing=1.0)
     salvar(fig, pasta, "fig5_corr91.pdf")
 
 
