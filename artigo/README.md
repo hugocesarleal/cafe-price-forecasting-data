@@ -1,6 +1,6 @@
 # Reprodução do artigo
 
-Scripts, resultados e figuras do artigo *Auditoria estatística de variáveis para a previsão do preço do café arábica: redundância regional, estrutura temporal e limites da correlação*.
+Scripts, resultados e figuras do artigo *Auditoria Estatística de Variáveis para a Previsão do Preço do Café Arábica: Redundância, Causalidade e Correlação*.
 
 | Arquivo | Conteúdo |
 |---|---|

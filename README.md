@@ -461,7 +461,7 @@ O dump desse banco não é distribuído, porque inclui séries da B3 e do Yahoo 
 
 ## Artigo
 
-A pasta [`artigo/`](artigo) contém os scripts que reproduzem as análises, as tabelas e as figuras do artigo *Auditoria estatística de variáveis para a previsão do preço do café arábica: redundância regional, estrutura temporal e limites da correlação*, os resultados em JSON e as figuras em PDF. O [`artigo/README.md`](artigo/README.md) explica como gerar a base e rodar cada script.
+A pasta [`artigo/`](artigo) contém os scripts que reproduzem as análises, as tabelas e as figuras do artigo *Auditoria Estatística de Variáveis para a Previsão do Preço do Café Arábica: Redundância, Causalidade e Correlação*, os resultados em JSON e as figuras em PDF. O [`artigo/README.md`](artigo/README.md) explica como gerar a base e rodar cada script.
 
 ---
 
