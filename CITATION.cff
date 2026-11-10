@@ -2,9 +2,19 @@ cff-version: 1.2.0
 message: "Se usar este código, cite-o como abaixo."
 title: "Pipeline de dados para a previsão do preço do café arábica"
 type: software
+abstract: >-
+  Pipeline que coleta, valida, transforma e versiona em PostgreSQL os dados
+  diários usados para prever o Indicador CEPEA/ESALQ do café arábica: preços
+  do CEPEA, câmbio PTAX e Selic do Banco Central, posição dos fundos na CFTC,
+  futuros da B3 e da ICE, clima do NASA POWER para três pontos de Minas Gerais
+  e o índice do Niño 3.4 da NOAA. Gera versões imutáveis da matriz de
+  variáveis, com as entradas de cada dia restritas à informação disponível
+  naquela data. A pasta artigo/ contém os scripts, os resultados e as figuras
+  da auditoria estatística das variáveis.
 license: MIT
 repository-code: "https://github.com/hugocesarleal/cafe-price-forecasting-data"
-date-released: 2026-11-09
+version: 1.0.0
+date-released: 2026-11-10
 authors:
   - family-names: Duque
     given-names: Gabriel Henrique Silva
