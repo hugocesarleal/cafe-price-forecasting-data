@@ -1,4 +1,4 @@
-"""Teste Obrigatório 16: ausência de vazamento temporal.
+"""Ausência de vazamento temporal.
 
 Para todo dia ``t`` e horizonte ``h``, ``X_t`` só pode depender de dados com
 data ``<= t`` e ``y_{t+h}`` só de preços posteriores a ``t``. A prova é por

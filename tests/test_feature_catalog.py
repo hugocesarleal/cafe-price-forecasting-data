@@ -1,8 +1,8 @@
-"""Testes Obrigatórios 14, 15 e 17: catálogo de variáveis e alvos.
+"""Catálogo de variáveis e alvos.
 
-* 14 — a matriz final contém somente variáveis KEEP e os alvos;
-* 15 — variáveis DROP, KEEP_WITH_CAVEAT e TEST_ONLY ficam fora da tabela final;
-* 17 — os alvos de 7, 15, 30 e 90 dias são gerados e são parametrizáveis.
+* a matriz final contém somente variáveis KEEP e os alvos;
+* variáveis DROP, KEEP_WITH_CAVEAT e TEST_ONLY ficam fora da tabela final;
+* os alvos de 7, 15, 30 e 90 dias são gerados e são parametrizáveis.
 
 A primeira parte roda em memória. A última seção exige PostgreSQL e usa o job
 ``teste_ingestao`` e versões ``teste-*`` como escopo, apagados ao final.
@@ -50,7 +50,7 @@ def matriz(core):
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 14 — somente KEEP e TARGET
+# Somente KEEP e TARGET
 # ---------------------------------------------------------------------------
 
 def test_matriz_contem_exatamente_as_variaveis_keep_e_os_alvos(matriz):
@@ -85,7 +85,7 @@ def test_mercado_em_dia_sem_pregao_repete_o_ultimo_fechamento(core, matriz):
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 15 — DROP fora da tabela final
+# DROP fora da tabela final
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("descartada", [
@@ -116,7 +116,7 @@ def test_regiao_ausente_em_core_nao_gera_coluna_vazia(core):
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 17 — alvos de 7, 15, 30 e 90 dias
+# Alvos de 7, 15, 30 e 90 dias
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("horizonte", HORIZONTES)

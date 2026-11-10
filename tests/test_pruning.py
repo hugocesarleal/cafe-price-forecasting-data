@@ -1,7 +1,7 @@
-"""Testes Obrigatórios 12 e 13: poda limitada a 2 anos e preservação dos brutos.
+"""Poda limitada a 2 anos e preservação dos brutos.
 
-* 12 — a poda nunca descarta mais que ``MAX_PRUNE_YEARS`` da janela;
-* 13 — podar não apaga nada: ``raw`` e ``core`` ficam intactos e as linhas de
+* a poda nunca descarta mais que ``MAX_PRUNE_YEARS`` da janela;
+* podar não apaga nada: ``raw`` e ``core`` ficam intactos e as linhas de
   features são apenas marcadas.
 
 A primeira parte roda em memória. A segunda exige PostgreSQL e trabalha numa
@@ -28,7 +28,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 12 — teto de 2 anos (em memória)
+# Teto de 2 anos (em memória)
 # ---------------------------------------------------------------------------
 
 def test_configuracao_padrao_do_teto_e_de_dois_anos():
@@ -91,7 +91,7 @@ def test_execucao_exige_exatamente_uma_forma_de_dizer_a_janela():
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 13 — nada é apagado (em memória)
+# Nada é apagado (em memória)
 # ---------------------------------------------------------------------------
 
 def test_nenhum_codigo_do_pipeline_apaga_dados():

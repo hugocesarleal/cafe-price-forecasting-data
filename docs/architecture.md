@@ -1,146 +1,133 @@
-# Arquitetura do Componente de Dados — Previsão do Preço do Café Arábica
+# Arquitetura do pipeline de dados
 
-## 1. Visão Geral e Limites de Escopo
+## 1. Escopo
 
-Este componente tem como objetivo exclusivo a coleta, armazenamento, validação de qualidade, engenharia de features causais, versionamento e disponibilização de dados para o modelo de previsão do café arábica (CEPEA/ESALQ R$/saca 60kg).
+O pipeline coleta, armazena, valida, transforma e versiona os dados usados para prever o Indicador CEPEA/ESALQ do café arábica (R$/saca de 60 kg). Ele não treina nem executa o modelo de previsão.
 
-### Limites Obrigatórios:
-- **Dentro do escopo:** Ingestão de dados de mercado e clima em PostgreSQL, validação rigorosa de qualidade, derivação de features selecionadas (KEEP), separação estrita sem vazamento temporal ($X_t \to y_{t+h}$), catálogo de variáveis, versionamento imutável de datasets, controle da janela histórica e contenção de poda (máximo 2 anos), gravação contratual de previsões em `predictions.forecasts`, auditoria e observabilidade.
-- **Fora do escopo:** Redes neurais, treinamento ou inferência de machine learning, visualizações/dashboards/widgets, métricas de acurácia de modelo (POCID/POSID), serviços pagos de dados e exclusão física irreversível de dados brutos (`raw`).
+- **Dentro do escopo:** ingestão de dados de mercado e clima em PostgreSQL, validação de qualidade, cálculo das variáveis selecionadas (`KEEP`), separação temporal entre entradas e alvos ($X_t \to y_{t+h}$), catálogo de variáveis, versões imutáveis do dataset, controle da janela histórica e da poda (no máximo 2 anos), registro das previsões em `predictions.forecasts`, auditoria.
+- **Fora do escopo:** o modelo de previsão (treino e inferência), painéis e visualizações, métricas de acurácia do modelo, fontes de dados pagas e exclusão física dos dados brutos (`raw`).
 
 ---
 
-## 2. Topologia de Schemas no PostgreSQL
+## 2. Schemas do PostgreSQL
 
-O banco de dados PostgreSQL é dividido em 6 schemas lógicos com responsabilidades bem delimitadas:
+O banco é dividido em seis schemas:
 
 ```
 [Fontes: CEPEA, BCB PTAX, NASA POWER, B3, ICE (Yahoo Finance)]
                   │
                   ▼
          ┌───────────────────┐
-         │     1. raw        │  <- Armazenamento bruto, imutável e auditável
+         │     1. raw        │  <- dados brutos, imutáveis e auditáveis
          └─────────┬─────────┘
                    │
                    ▼
          ┌───────────────────┐
-         │    2. staging     │  <- Limpeza inicial, parsing e validação de tipos
+         │    2. staging     │  <- limpeza, tipagem e validação
          └─────────┬─────────┘
                    │
                    ▼
          ┌───────────────────┐
-         │     3. core       │  <- Entidades diárias normalizadas e consolidadas
+         │     3. core       │  <- séries diárias deduplicadas
          └─────────┬─────────┘
                    │
                    ▼
          ┌───────────────────┐
-         │    4. features    │  <- Catálogo, variáveis KEEP e datasets versionados
+         │    4. features    │  <- catálogo, variáveis KEEP e versões
          └─────────┬─────────┘
                    │
         ┌──────────┴──────────┐
         ▼                     ▼
 ┌──────────────────┐  ┌──────────────────┐
 │  5. predictions  │  │    6. audit      │
-│ (Forecasts ext.) │  │(Execuções/Checks)│
+│   (previsões)    │  │(execuções/checks)│
 └──────────────────┘  └──────────────────┘
 ```
 
-1. **`raw`**: Recebe os dados exatamente como fornecidos pela fonte, sem transformações destrutivas, acompanhados de metadados de carga (URL, commit/arquivo, hash SHA-256, timestamp de coleta e `run_id`).
-2. **`staging`**: Área de descompressão e validação preliminar (tipagem, normalização de datas, filtros de sintaxe). Tabelas truncadas ou particionadas por carga.
-3. **`core`**: Séries históricas limpas, deduplicadas e normalizadas em granularidade diária (`core.market_daily` e `core.weather_daily`), mantendo histórico completo.
-4. **`features`**: Catálogo de variáveis (`features.variable_catalog`), cálculo causal de variáveis derivadas autorizadas, geração de alvos para 7, 15, 30 e 90 dias, e snapshots versionados imutáveis (`features.dataset_versions`).
-5. **`predictions`**: Tabela de destino onde o modelo externo de rede neural grava suas inferências, referenciando o `dataset_version_id`, `model_version`, data de corte e horizonte.
-6. **`audit`**: Rastreabilidade completa de pipeline (`pipeline_runs`), verificações de qualidade (`data_quality_checks`), execuções de modelo (`model_runs`) e eventos assíncronos (`pending_events`).
+1. **`raw`**: os dados como chegaram da fonte, com os metadados da carga (URL, arquivo, hash SHA-256, horário da coleta e `run_id`).
+2. **`staging`**: área transitória de tipagem, normalização de datas e validação, por carga.
+3. **`core`**: séries diárias limpas e deduplicadas (`core.market_daily` e `core.weather_daily`), com o histórico completo.
+4. **`features`**: catálogo de variáveis (`features.variable_catalog`), variáveis derivadas, alvos de 7, 15, 30 e 90 dias e versões imutáveis do dataset (`features.dataset_versions`).
+5. **`predictions`**: onde o modelo de previsão grava suas inferências, com `dataset_version_id`, `model_version`, data de corte e horizonte.
+6. **`audit`**: execuções (`pipeline_runs`), checagens de qualidade (`data_quality_checks`), execuções do modelo (`model_runs`) e eventos (`pending_events`).
 
 ---
 
-## 3. Fluxo de Execução do Pipeline (15 Passos)
+## 3. Fluxo de uma execução
 
-O pipeline implementa o seguinte ciclo de vida estritamente orquestrado:
-
-1. **Iniciar execução:** Gera um `run_id` (UUID v4) único e registra o início em `audit.pipeline_runs` com status `RUNNING`.
-2. **Verificar Concorrência:** Adquire PostgreSQL Advisory Lock (`pg_try_advisory_lock`) para impedir execuções simultâneas conflitantes.
-3. **Baixar dados do Agro.br e fontes:** Obtém cotações de mercado e dados climáticos via adaptador configurável.
-4. **Registrar metadados:** Salva fonte, URL, arquivo, hash e timestamp em `raw.ingestion_files`.
-5. **Verificar se a fonte mudou:** Compara o hash da coleta atual com o da última carga que terminou em `SUCCESS`.
-6. **Salvar dados brutos em `raw`:** Insere observações em `raw.market_observations` e `raw.weather_observations`.
-7. **Validar colunas, tipos, datas e valores:** Validador em Python inspeciona esquema e limites plausíveis.
-8. **Carregar `staging`:** Carga controlada nas tabelas transitórias de staging.
-9. **Deduplicação e Upsert:** Stored procedures executam mesclagem idempotente em `core.market_daily` e `core.weather_daily` via `ON CONFLICT DO UPDATE` com `COALESCE`.
-10. **Recalcular variáveis derivadas:** Calcula métricas causais autorizadas (janelas móveis até a data de corte $t$, codificação cíclica seno/cosseno).
-11. **Criar versão imutável do dataset:** Registra snapshot em `features.dataset_versions` e popula `features.model_features` apenas com as variáveis `KEEP` e os alvos derivados `y_*`; `preco_arabica` não é armazenado como feature.
-12. **Sinalizar prontidão:** Dispara trigger/evento em `audit.pending_events` indicando dataset pronto para consumo.
-13. **Disponibilizar contrato para previsão:** Expõe consulta e metadados para o componente externo.
-14. **Registrar previsões:** Recebe e valida inferências externas em `predictions.forecasts`.
-15. **Finalizar execução:** Atualiza `audit.pipeline_runs` para `SUCCESS` (ou `FAILED`), computando métricas de tempo, contagem de linhas e logs. Libera o lock.
+1. **Início:** gera um `run_id` (UUID v4) e registra a execução em `audit.pipeline_runs` com status `RUNNING`.
+2. **Concorrência:** obtém o advisory lock (`pg_try_advisory_lock`); se outra execução estiver em andamento, termina como `BLOCKED`.
+3. **Coleta:** obtém cotações e clima pelo cliente configurado em `AGROBR_MODE`.
+4. **Metadados:** grava fonte, URL, arquivo, hash e horário em `raw.ingestion_files`.
+5. **Mudança na fonte:** compara o hash com o da última carga bem sucedida.
+6. **Brutos:** insere as observações em `raw.market_observations` e `raw.weather_observations`.
+7. **Validação:** confere colunas, tipos, datas e limites físicos.
+8. **Staging:** carrega as linhas aprovadas nas tabelas de `staging`.
+9. **Upsert em `core`:** procedures fazem a mesclagem idempotente em `core.market_daily` e `core.weather_daily` (`ON CONFLICT DO UPDATE` com `COALESCE`).
+10. **Variáveis derivadas:** janelas móveis fechadas no dia de corte $t$ e codificação cíclica do calendário.
+11. **Versão do dataset:** registra a versão em `features.dataset_versions` e grava em `features.model_features` só as variáveis `KEEP` e os alvos `y_*`; `preco_arabica` não é gravado como entrada.
+12. **Aviso de prontidão:** um trigger registra o evento em `audit.pending_events`.
+13. **Consumo:** a consulta padrão e os metadados ficam disponíveis para o modelo.
+14. **Previsões:** recebe e valida as inferências em `predictions.forecasts`.
+15. **Fim:** atualiza `audit.pipeline_runs` para `SUCCESS` ou `FAILED`, com tempos e contagens, e libera o lock.
 
 ---
 
-## 4. Idempotência e Bloqueio de Concorrência
+## 4. Idempotência e concorrência
 
-- **Idempotência:** Cada observação possui chave natural única:
-  - Mercado: `(data_ref, variable_name)`
-  - Clima: `(data_ref, regiao, variable_name)`
-  - Reexecutar uma carga para a mesma data sobrescreve os mesmos registros com os dados mais recentes sem duplicar linhas.
-- **Bloqueio de Concorrência:**
-  - Uso de **PostgreSQL Advisory Locks** vinculados a uma chave inteira constante de aplicação (`ADVISORY_LOCK_KEY`, padrão `84729103`):
-    `SELECT pg_try_advisory_lock(84729103);`
-  - Se outra instância tentar rodar ao mesmo tempo, a execução é abortada imediatamente com registro em log e saída segura com código de aviso, impedindo race conditions.
+- **Idempotência:** cada observação tem chave natural única, `(data_ref, variable_name)` no mercado e `(data_ref, regiao, variable_name)` no clima. Repetir a carga de uma data atualiza os mesmos registros, sem duplicar linhas.
+- **Concorrência:** o advisory lock usa a chave inteira `ADVISORY_LOCK_KEY` (padrão `84729103`):
+  `SELECT pg_try_advisory_lock(84729103);`
+  Uma segunda instância que tente rodar ao mesmo tempo termina imediatamente, com registro em log e código de saída próprio.
 
 ---
 
-## 5. Diretrizes da Janela Histórica e Contenção de Poda
+## 5. Janela histórica e poda
 
-### Contexto Histórico e Decisão Consolidada:
-O documento de especificação referenciava duas janelas temporais contraditórias:
-- Janela de **9 anos** com poda máxima autorizada de **2 anos**.
-- Mínimo de segurança de **1.096 dias** (~3 anos) exigido pela especificação.
+O projeto combina duas exigências: uma janela de **9 anos**, da qual se pode podar no máximo **2 anos**, e um mínimo de **1.096 dias** (cerca de 3 anos) de dados ativos. Na versão de treino de 22/10/2026, `core` guarda 9 anos de histórico, a versão começa em **2018-01-02** (primeiro ajuste publicado pela B3) e nenhuma poda foi aplicada. As regras abaixo valem para as versões seguintes.
 
-A entrega de 23/10/2026 resolveu o impasse na prática: `core` guarda 9 anos de histórico, a versão de treino começa em **2018-01-02** (primeiro ajuste publicado pela B3) e nenhuma poda foi aplicada. As regras abaixo continuam valendo para versões futuras.
-
-### Regras de Implementação do Sistema:
-1. **Transparência Absoluta:** O sistema inicializa imprimindo em nível WARNING/INFO o comparativo entre a janela configurada (`HISTORICAL_YEARS=9`), o mínimo de segurança (`DATASET_MIN_DAYS=1096`) e os limites de data encontrados na base.
-2. **Trava em Produção:** Requer explicitamente `CONFIRM_HISTORICAL_WINDOW=true` nas variáveis de ambiente. Caso ausente em produção, o pipeline recusa prosseguir e instrui a confirmação.
-3. **Teto de Poda Máxima de 2 Anos:** A função de poda rejeita formalmente qualquer tentativa de descartar mais de 730 dias (2 anos) da janela móvel histórica.
-4. **Poda Estritamente Lógica:** A poda atua **apenas** nas visualizações e tabelas de features (`features.model_features`), aplicando flags de arquivamento (`is_pruned = TRUE`). Os dados em `raw` e `core` **nunca sofrem delete físico**.
-5. **Piso Fixo da Janela de Treino:** `DATASET_START_DATE` (no `.env` da entrega, `2018-01-02`) define o início das versões do dataset e vence o recuo de `HISTORICAL_YEARS` quando o corte é posterior. Se o piso configurado for posterior ao corte, o sistema registra um aviso e volta ao recuo histórico. A coleta e o `core` continuam guardando o histórico completo.
+1. **Registro da janela:** ao iniciar, o sistema registra em log a janela configurada (`HISTORICAL_YEARS=9`), o mínimo (`DATASET_MIN_DAYS=1096`) e as datas encontradas na base.
+2. **Confirmação:** a poda exige `CONFIRM_HISTORICAL_WINDOW=true`; sem ela, o pipeline se recusa a prosseguir.
+3. **Teto:** a poda rejeita qualquer pedido que descarte mais de 730 dias (2 anos) da janela.
+4. **Poda lógica:** a poda só marca linhas de `features.model_features` com `is_pruned = TRUE`. Nada em `raw` ou `core` é apagado.
+5. **Piso da janela:** `DATASET_START_DATE` (`2018-01-02` na versão de treino) define o início das versões e prevalece sobre o recuo de `HISTORICAL_YEARS` quando o corte é posterior. Se o piso for posterior ao corte, o sistema registra um aviso e volta ao recuo histórico. A coleta e `core` continuam com o histórico completo.
 
 ---
 
-## 6. Prevenção Rigorosa Contra Vazamento Temporal (Data Leakage)
+## 6. Vazamento temporal
 
-O pipeline garante que para cada dia $t$ e horizonte preditivo $h \in \{7, 15, 30, 90\}$:
+Para cada dia $t$ e horizonte $h \in \{7, 15, 30, 90\}$, as entradas de $t$ só usam informação disponível até $t$:
 $$X_t \longrightarrow y_{t+h}$$
 
-- **Nenhuma informação contemporânea ou futura do alvo entra nas features do dia $t$:**
-  `preco_arabica` contemporâneo de $t$ **nunca** é utilizado como feature preditiva para prever $t$. Apenas defasagens (lags passados: $t-1, t-2, \dots$), retornos passados e médias passadas são permitidos.
-- **Preenchimento Causal Estrito:** Séries com divulgação defasada são deslocadas pelo atraso de publicação antes de entrar nas features. No recorte atual, o clima do NASA POWER entra com 3 dias de atraso (5 para radiação) via `PUBLICATION_LAG_DAYS`; o preenchimento de lacunas é apenas para frente e limitado.
-- **Janelas Móveis Fechadas em $t$:** Todas as funções agregadas (médias móveis, desvios, somas de precipitação de 30 e 90 dias) são calculadas em Python (`src/transformations.py`) com janelas terminadas em $t$, sem extrapolação para o futuro.
+- **Alvo contemporâneo:** `preco_arabica` do dia $t$ nunca entra como entrada; só defasagens, retornos e médias passadas.
+- **Atraso de publicação:** séries divulgadas com atraso são deslocadas antes de entrar nas features. O clima do NASA POWER entra com 3 dias de atraso (5 para radiação), conforme `PUBLICATION_LAG_DAYS`. Lacunas só são preenchidas para frente, com limite.
+- **Janelas fechadas em $t$:** médias, desvios e somas de chuva de 30 e 90 dias são calculados em `src/transformations.py` com janelas que terminam em $t$.
 
 ---
 
-## 7. Políticas de Triggers e Stored Procedures
+## 7. Triggers e procedures
 
-### Triggers (Exclusivamente Leves e Locais):
-- Atualização automática de coluna `updated_at`.
-- Auditoria de alterações e inserção de eventos em `audit.pending_events`.
-- **Proibido expressamente em triggers:** Chamadas HTTP, downloads do Agro.br, scrapers, processamento pesado ou inferência de redes neurais.
+Triggers ficam restritos a tarefas leves e locais:
+- atualização da coluna `updated_at`;
+- registro de eventos em `audit.pending_events`.
 
-### Stored Procedures (Transações no Banco):
-- `core.sp_upsert_market_observations(p_run_id UUID)`: Migra e deduplica de staging para core.
-- `core.sp_upsert_weather_observations(p_run_id UUID)`: Consolida dados climáticos.
-- `audit.sp_register_pipeline_start(...)` / `audit.sp_register_pipeline_finish(...)`: Registram início e término de execuções.
-- `audit.fn_emit_event(...)`: Registra eventos em `audit.pending_events`.
+Nenhum trigger faz chamada HTTP, coleta, processamento pesado ou inferência.
 
-O congelamento do snapshot de features não é uma procedure: fica em `src/dataset_versioning.py`, porque o checksum é calculado sobre a matriz antes da gravação e a versão só é validada depois que todas as linhas entram, na mesma transação.
+Procedures:
+- `core.sp_upsert_market_observations(p_run_id UUID)`: move e deduplica o mercado de `staging` para `core`.
+- `core.sp_upsert_weather_observations(p_run_id UUID)`: faz o mesmo para o clima.
+- `audit.sp_register_pipeline_start(...)` / `audit.sp_register_pipeline_finish(...)`: registram início e fim das execuções.
+- `audit.fn_emit_event(...)`: registra eventos em `audit.pending_events`.
+
+O congelamento da versão do dataset não é uma procedure: fica em `src/dataset_versioning.py`, porque o checksum é calculado sobre a matriz antes da gravação e a versão só é validada depois que todas as linhas entram, na mesma transação.
 
 ---
 
-## 8. Integração com o Agro.br
+## 8. Coleta
 
-A coleta segue o padrão Strategy: `AgrobrClient` (em `src/agrobr_client.py`) define o contrato e a política de novas tentativas, e `AGROBR_MODE` escolhe a implementação.
+`AgrobrClient` (em `src/agrobr_client.py`) define o contrato da coleta e a política de novas tentativas; `AGROBR_MODE` escolhe a implementação.
 
-- **Modo Real** (`src/agrobr_real.py`): usa a biblioteca `agrobr` para CEPEA/ESALQ, BCB PTAX, B3 e NASA POWER, e o Yahoo Finance para o contrato Coffee C da ICE. O histórico do CEPEA vem de CSVs atualizados a partir da planilha do site (`src/cepea_series.py`, por importação do arquivo baixado no navegador, já que o site recusa o download automático); o `agrobr` completa os dias recentes. Os ajustes da B3 são baixados um pregão por vez, em lotes, com cache em disco.
-- **Modo Simulado** (`SimulatedAgrobrClient`): lê os mesmos CSVs do CEPEA e fabrica o resto — câmbio e futuros derivados das colunas de preço, clima por fórmula determinística. Existe para desenvolver e testar o pipeline sem rede; seus dados não servem para treino.
+- **Modo real** (`src/agrobr_real.py`): usa a biblioteca `agrobr` para CEPEA/ESALQ, BCB PTAX, B3 e NASA POWER, e o Yahoo Finance para o contrato Coffee C da ICE. O histórico do CEPEA vem de CSVs atualizados a partir da planilha do site (`src/cepea_series.py`, por importação do arquivo baixado no navegador, já que o site recusa o download automático); o `agrobr` completa os dias recentes. Os ajustes da B3 são baixados um pregão por vez, com cache em disco.
+- **Modo simulado** (`SimulatedAgrobrClient`): lê os mesmos CSVs do CEPEA e gera o restante, com câmbio e futuros derivados das colunas de preço e clima por fórmula determinística. Serve para desenvolver e testar o pipeline sem rede; seus dados não servem para treino.
 
-Os dois modos entregam o mesmo formato (`SourceFile` com linhas longas de mercado e clima), então nada depois da coleta sabe de qual deles os dados vieram. Por isso os dois não devem alimentar o mesmo banco.
+Os dois modos produzem o mesmo formato (`SourceFile` com linhas longas de mercado e clima), então nada depois da coleta sabe de qual deles os dados vieram. Por isso os dois não devem alimentar o mesmo banco.

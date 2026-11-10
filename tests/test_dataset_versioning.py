@@ -1,7 +1,7 @@
-"""Testes Obrigatórios 18 e 20: versionamento e recuperação da última versão válida.
+"""Versionamento do dataset e recuperação da última versão válida.
 
-* 18 — a matriz de features vira uma versão imutável, assinada por checksum;
-* 20 — depois de uma falha, a última versão válida continua sendo a entregue.
+* a matriz de features vira uma versão imutável, assinada por checksum;
+* depois de uma falha, a última versão válida continua sendo a entregue.
 
 A primeira parte roda em memória. A segunda exige PostgreSQL: as versões são
 criadas numa transação que nunca é confirmada, então nenhum outro consumidor do
@@ -156,7 +156,7 @@ def eventos_ready(conn, version_id):
                         "AND payload->>'dataset_version_id' = %s", version_id)
 
 
-# -- Teste Obrigatório 18 ---------------------------------------------------
+# -- Versão criada válida, assinada e sinalizada ----------------------------
 
 def test_versao_e_criada_valida_assinada_e_sinalizada(ingest_conn, core_no_banco):
     matriz = construir(ingest_conn, core_no_banco)
@@ -221,7 +221,7 @@ def test_adulteracao_das_linhas_e_detectada_pelo_checksum(ingest_conn, core_no_b
     assert not dv.verify_dataset_version(ingest_conn, versao.dataset_version_id)
 
 
-# -- Teste Obrigatório 20 ---------------------------------------------------
+# -- Falha não substitui nem apaga a última versão válida -------------------
 
 def test_falha_na_gravacao_nao_deixa_versao_e_mantem_a_anterior(
     ingest_conn, core_no_banco, monkeypatch

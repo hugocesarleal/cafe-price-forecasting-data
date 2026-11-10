@@ -1,4 +1,4 @@
-"""Teste Obrigatório 1: Criação dos Schemas e Estrutura de Tabelas."""
+"""Criação dos schemas e estrutura das tabelas."""
 
 import pytest
 

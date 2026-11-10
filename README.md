@@ -1,21 +1,23 @@
-# Pipeline de Dados — Previsão do Preço do Café Arábica
+# Pipeline de dados para a previsão do preço do café arábica
 
 > **Variável-alvo:** Indicador CEPEA/ESALQ Café Arábica (R$/saca 60 kg)  
-> **Recorte geográfico:** Região de Bambuí/MG — Centro-Oeste Mineiro  
+> **Recorte geográfico:** região de Bambuí/MG, Centro-Oeste Mineiro  
 > **Horizontes de previsão:** 7, 15, 30 e 90 dias  
 
 ---
 
 ## O que este repositório faz
 
-Este componente é responsável exclusivamente por **coletar, armazenar, validar, transformar e versionar** os dados que alimentam um modelo de rede neural de previsão de preço do café. Ele **não treina nem executa o modelo** — apenas entrega a matriz de features pronta e registra as previsões geradas pelo time de ML. O armazenamento é **exclusivamente PostgreSQL**: a base legada em SQLite foi absorvida pelo histórico do projeto e não é mais usada pelo pipeline.
+Este repositório coleta, armazena, valida, transforma e versiona os dados que alimentam um modelo de rede neural para a previsão do preço do café arábica. Ele não treina nem executa o modelo: entrega a matriz de variáveis pronta e registra as previsões que o modelo devolve. O armazenamento é feito em PostgreSQL; a base anterior, em SQLite, foi incorporada ao histórico e não é mais usada pelo pipeline.
+
+A pasta [`artigo/`](artigo) reúne os scripts, os resultados e as figuras do artigo sobre a auditoria estatística das variáveis (ver [Artigo](#artigo)).
 
 ---
 
 ## Arquitetura
 
 ```
-Fontes Externas (CEPEA, BCB PTAX, NASA POWER, B3, ICE)
+Fontes externas (CEPEA, BCB PTAX, NASA POWER, B3, ICE)
         │
         ▼
   ┌──────────────┐    ┌──────────────┐
@@ -48,12 +50,12 @@ Fontes Externas (CEPEA, BCB PTAX, NASA POWER, B3, ICE)
 | `staging` | Área transitória de limpeza e tipagem por execução |
 | `core` | Séries históricas deduplicadas em granularidade diária |
 | `features` | Catálogo de variáveis, dataset versionado e alvos $y_{t+h}$ |
-| `predictions` | Registro formal das previsões produzidas pela rede neural |
+| `predictions` | Registro das previsões produzidas pela rede neural |
 | `audit` | Execuções de pipeline, checagens de qualidade e eventos assíncronos |
 
 ---
 
-## Estrutura do Projeto
+## Estrutura do projeto
 
 ```
 .
@@ -84,26 +86,29 @@ Fontes Externas (CEPEA, BCB PTAX, NASA POWER, B3, ICE)
 │   └── integrations/
 │       └── django.py            # Adaptador de fronteira para Django/Celery (caixa preta)
 │
-├── tests/                       # Suite pytest (testes obrigatórios do documento)
+├── tests/                       # Testes (pytest)
 ├── jobs/                        # Jobs agendáveis e manuais
 │   ├── runner.py                # Linha de comando, corte e novas tentativas
 │   ├── apscheduler_runner.py    # Agendador diário (APScheduler) do modo --schedule
-│   ├── update_daily.py          # 00:00 — fecha o dia anterior
-│   ├── update_after_close.py    # Pós-fechamento — fecha o próprio dia
-│   ├── update_before_open.py    # Pré-abertura — revisa o dia anterior
+│   ├── update_daily.py          # 00:00, fecha o dia anterior
+│   ├── update_after_close.py    # Pós-fechamento, fecha o próprio dia
+│   ├── update_before_open.py    # Pré-abertura, revisa o dia anterior
 │   ├── run_on_demand.py         # Execução sob demanda
 │   └── reprocess_period.py      # Reprocessamento manual de um período
 ├── examples/                    # Exemplos de integração (Django: command, task Celery, Admin)
-├── docs/                        # Arquitetura, dicionário de dados, contrato ML, runbook
+├── docs/                        # Arquitetura, dicionário de dados, contrato do modelo, runbook
+├── artigo/                      # Scripts, resultados e figuras do artigo
 │
 ├── .env.example                 # Template de variáveis de ambiente
 ├── requirements.txt             # Dependências Python
-└── docker-compose.yml           # PostgreSQL 16 conteinerizado
+├── docker-compose.yml           # PostgreSQL 16 conteinerizado
+├── CITATION.cff                 # Como citar
+└── LICENSE                      # Licença MIT
 ```
 
 ---
 
-## Configuração e Execução
+## Configuração e execução
 
 ### Pré-requisitos
 
@@ -123,12 +128,12 @@ cp .env.example .env
 # Edite .env com suas credenciais PostgreSQL
 ```
 
-Parâmetros críticos do `.env`:
+Principais parâmetros do `.env`:
 
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `DB_HOST` | `127.0.0.1` | Host do PostgreSQL |
-| `DB_PORT` | `5433` | Porta (o `.env.example` e o `docker-compose.yml` usam `5432`) |
+| `DB_PORT` | `5433` | Porta; o padrão do código é `5433`, e o `.env.example` e o `docker-compose.yml` usam `5432` |
 | `DB_NAME` | `cafe_previsao` | Nome do banco |
 | `PIPELINE_DATABASE_URL` | (vazio) | URL completa do banco do pipeline; vence `DB_*` na conexão do pipeline |
 | `ADVISORY_LOCK_KEY` | `84729103` | Chave do advisory lock que serializa os ciclos no PostgreSQL |
@@ -146,7 +151,7 @@ Parâmetros críticos do `.env`:
 | `CEPEA_AUTO_DOWNLOAD` | `false` | Tenta baixar a série do CEPEA a cada coleta real; o site recusa hoje (403) |
 | `COLLECTION_CACHE_DIR` | `.cache/coleta` | Cache em disco da coleta real (ajustes da B3) |
 | `COLLECTION_WINDOW_DAYS` | `0` | Dias recoletados pelos jobs agendados; `0` = janela inteira |
-| `CONFIRM_HISTORICAL_WINDOW` | `true` | Trava obrigatória em produção |
+| `CONFIRM_HISTORICAL_WINDOW` | `true` | Confirmação exigida antes de podar a janela |
 
 ### 3. Criar o banco e aplicar migrations
 
@@ -160,7 +165,7 @@ python -m src.migrator
 
 ### 4. Executar a ingestão
 
-Com `AGROBR_MODE=real`, a primeira execução baixa todo o histórico da B3 e leva horas (veja [Fontes de Dados](#fontes-de-dados)). Para começar com uma janela menor, use `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD`.
+Com `AGROBR_MODE=real`, a primeira execução baixa todo o histórico da B3 e leva horas (veja [Fontes de dados](#fontes-de-dados)). Para começar com uma janela menor, use `python -m jobs.reprocess_period --start AAAA-MM-DD --end AAAA-MM-DD`.
 
 ```bash
 python -m src.ingestion
@@ -202,7 +207,7 @@ Toda execução fica auditada em `audit.pipeline_runs` (status, contagens, erro)
 python -m src.feature_builder
 ```
 
-Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grade diária e imprime um resumo em JSON (janela, colunas, alvos preenchidos, candidatas excluídas pelo catálogo). O comando **não grava nada** — serve para inspecionar a matriz antes de publicar.
+Lê `core` até o último dia com `preco_arabica`, calcula as variáveis na grade diária e imprime um resumo em JSON (janela, colunas, alvos preenchidos, candidatas excluídas pelo catálogo). O comando **não grava nada**; serve para inspecionar a matriz antes de publicar.
 
 Só entram as variáveis que o catálogo marca como `KEEP`. Uma variável `KEEP` sem dado em `core` (uma região ausente, por exemplo) interrompe a construção em vez de publicar uma coluna vazia.
 
@@ -218,7 +223,7 @@ Constrói as features, roda as checagens de qualidade e congela o resultado numa
 |---|---|
 | Conteúdo idêntico ao de uma versão válida | Nenhuma versão nova; a existente é devolvida (`reused`) |
 | Mesmo corte, conteúdo revisado | Versão nova, com o início do checksum na tag |
-| Checagem **CRÍTICA** reprovada | Nenhuma versão criada, execução `FAILED`, a última versão válida continua sendo a entregue |
+| Checagem **CRÍTICA** reprovada | Nenhuma versão criada, execução `FAILED`, a última versão válida continua em uso |
 | Erro durante a gravação | Transação desfeita: nem versão, nem linhas parciais |
 | Outra execução em andamento | Execução `BLOCKED` |
 
@@ -244,7 +249,7 @@ Lê a última versão válida, gera previsões fictícias para os horizontes con
 
 ### 8. Agendar e operar os jobs
 
-Cada job executa o ciclo completo — ingestão, features e versão do dataset — numa execução auditada, com um único lock para o ciclo inteiro.
+Cada job executa o ciclo completo (ingestão, features e versão do dataset) numa execução auditada, com um único lock para o ciclo inteiro.
 
 | Job | Quando | Dia que fecha |
 |---|---|---|
@@ -256,14 +261,14 @@ Cada job executa o ciclo completo — ingestão, features e versão do dataset �
 
 Por padrão os jobs agendados recoletam a janela histórica inteira a cada execução, e `raw` (que só acumula) recebe todas essas linhas de novo. Depois da primeira carga, defina `COLLECTION_WINDOW_DAYS` (por exemplo `45`) para que eles recoletem só os dias recentes.
 
-Sem opções, um job roda uma vez e termina — é a forma de usar com cron ou com o Agendador de Tarefas do Windows. Com `--schedule` ele fica em execução e dispara todos os dias no horário configurado, no fuso `TIMEZONE`:
+Sem opções, um job roda uma vez e termina, que é a forma de usar com cron ou com o Agendador de Tarefas do Windows. Com `--schedule` ele fica em execução e dispara todos os dias no horário configurado, no fuso `TIMEZONE`:
 
 ```bash
 python -m jobs.update_daily --schedule                 # agendador embutido (APScheduler)
 python -m jobs.update_daily --schedule --cutoff 2026-09-30   # fixa o dia de todas as execuções
 ```
 
-O agendador embutido é o APScheduler (`jobs/apscheduler_runner.py`): um `CronTrigger` diário no fuso `TIMEZONE`, com `coalesce=True` e `max_instances=1` (nada se acumula nem se sobrepõe), tolerância a atraso `MISFIRE_GRACE_SECONDS` (dentro dela o disparo atrasado ainda roda uma vez; além dela fica registrado como perdido e o próximo horário normal assume), id estável (`SCHEDULER_JOB_ID` ou o nome do job — reiniciar não duplica) e encerramento controlado por SIGTERM/SIGINT, esperando a execução em curso. `SCHEDULER_ENABLED=false` desliga o agendamento sem erro. O pacote `apscheduler` só é exigido pelo modo `--schedule`; execução única e cron não dependem dele.
+O agendador embutido é o APScheduler (`jobs/apscheduler_runner.py`): um `CronTrigger` diário no fuso `TIMEZONE`, com `coalesce=True` e `max_instances=1` (nada se acumula nem se sobrepõe), tolerância a atraso `MISFIRE_GRACE_SECONDS` (dentro dela o disparo atrasado ainda roda uma vez; além dela fica registrado como perdido e o próximo horário normal assume), id estável (`SCHEDULER_JOB_ID` ou o nome do job; reiniciar não duplica) e encerramento controlado por SIGTERM/SIGINT, esperando a execução em curso. `SCHEDULER_ENABLED=false` desliga o agendamento sem erro. O pacote `apscheduler` só é exigido pelo modo `--schedule`; execução única e cron não dependem dele.
 
 O código de saída é `0` (SUCCESS), `1` (FAILED) ou `2` (BLOCKED: outro job está rodando).
 
@@ -296,7 +301,7 @@ resultado = run_dataset_job("pipeline_django")      # só construção do datase
 
 Precedência de configuração, por campo: **explícita do chamador > Django > ambiente/`.env`**. Divergência nunca passa em silêncio: campos de conexão e de retry são honrados com aviso registrando qual fonte venceu; qualquer outro campo divergente derruba a chamada com `PipelineConfigError`.
 
-Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `migrations/` (`python -m src.migrator`) — não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
+Exemplos prontos em `examples/django_integration/`: management command fino, task Celery e Admin somente leitura sobre `audit.pipeline_runs`. O esquema continua sendo criado **somente** pelas migrations SQL de `migrations/` (`python -m src.migrator`); não crie migrations Django duplicadas para as mesmas tabelas. Não agende o pipeline em views, signals ou middlewares.
 
 ### 10. Podar a janela histórica
 
@@ -318,7 +323,7 @@ Os testes de ingestão exigem um PostgreSQL acessível e usam o job `teste_inges
 
 ---
 
-## Fontes de Dados
+## Fontes de dados
 
 O modo de coleta é escolhido por `AGROBR_MODE`.
 
@@ -345,7 +350,7 @@ Serve para desenvolver e testar o pipeline sem rede. **Não serve para treinar m
 
 > **Não misture os dois modos no mesmo banco.** A publicação em `core` é por upsert: uma ingestão simulada grava por cima de câmbio, futuros e clima reais das mesmas datas, e um banco que já recebeu dados simulados fica com eles onde a coleta real não tiver valor. Use bancos separados.
 
-## Variáveis do Modelo
+## Variáveis do modelo
 
 ### Entradas (KEEP)
 
@@ -371,11 +376,11 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 
 ---
 
-## Garantias de Qualidade
+## Garantias de qualidade
 
 | Garantia | Como é implementada |
 |---|---|
-| **Sem data leakage** | Nada posterior ao corte é lido; janelas fechadas em $t$; preenchimento só para frente e com limite; `preco_arabica` do dia nunca é feature; clima deslocado pelo atraso de publicação do NASA POWER (`PUBLICATION_LAG_DAYS`: 3 dias, 5 para radiação) |
+| **Sem vazamento temporal** | Nada posterior ao corte é lido; janelas fechadas em $t$; preenchimento só para frente e com limite; `preco_arabica` do dia nunca é feature; clima deslocado pelo atraso de publicação do NASA POWER (`PUBLICATION_LAG_DAYS`: 3 dias, 5 para radiação) |
 | **Imutabilidade do raw** | `raw.market_observations` e `raw.weather_observations` nunca têm linhas deletadas |
 | **Idempotência** | Upsert com `ON CONFLICT … DO UPDATE SET col = COALESCE(excluded.col, atual)` |
 | **Sem concorrência** | `pg_try_advisory_lock` impede duas instâncias simultâneas |
@@ -390,30 +395,30 @@ Todas as variáveis com sufixo `_bambui`, anomalias padronizadas, SELIC, IPCA, C
 python -m pytest tests/ -v --tb=short
 ```
 
-| Arquivo de Teste | Casos | Cobertura |
+| Arquivo | Casos | Cobertura |
 |---|---|---|
-| `test_schema.py` | 3 | Schemas, tabelas obrigatórias e seed do catálogo |
-| `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias (6), tipos (7), limites e tolerância de 5% (8), nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
+| `test_schema.py` | 3 | Schemas, tabelas e seed do catálogo |
+| `test_validation.py` | 36 | As 12 checagens: colunas obrigatórias, tipos, limites e tolerância de 5%, nulos, datas, duplicidades, unidades, continuidade, horizontes e persistência em `audit.data_quality_checks` |
 | `test_cepea_series.py` | 30 | Leitura da planilha do CEPEA (datas dd/mm, números pt-BR), conferência contra o CSV existente, gravação com `.bak`, falhas que não tocam no arquivo |
 | `test_agrobr_real.py` | 31 | Coleta real com downloads substituídos: junção CEPEA manual + recente, PTAX, 1º vencimento da B3, cache e retomada, pregão em andamento da ICE, clima não publicado, falhas de rede (1 teste contra as fontes de verdade, desligado por padrão) |
-| `test_ingestion.py` | 19 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão (9), retry (10), lock concorrente (11), retomada após falha no meio da carga e `force` |
-| `test_idempotency.py` | 9 | Carga repetida não duplica (3), deduplicação dentro e entre origens (4), upsert sem duplicar datas e com `COALESCE` (5) |
+| `test_ingestion.py` | 19 | Pipeline ponta a ponta, metadados da coleta, quarentena, bloqueio por falha CRÍTICA, falha de conexão, retry, lock concorrente, retomada após falha no meio da carga e `force` |
+| `test_idempotency.py` | 9 | Carga repetida não duplica, deduplicação dentro e entre origens, upsert sem duplicar datas e com `COALESCE` |
 | `test_transformations.py` | 16 | Janelas móveis, preenchimento causal, calendário cíclico, alvos e separação treino/validação/teste com embargo |
-| `test_no_future_leakage.py` | 10 | Anti-leakage por perturbação (16): alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
-| `test_feature_catalog.py` | 29 | Somente KEEP e alvos (14), DROP fora da tabela final (15), alvos de 7/15/30/90 dias (17), publicação sem duplicar |
-| `test_dataset_versioning.py` | 22 | Checksum, checagens da matriz, versão imutável (18), falha não substitui nem apaga a última versão válida (20), piso configurável da janela |
-| `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte (19) |
+| `test_no_future_leakage.py` | 10 | Vazamento temporal por perturbação: alterar o futuro não muda o passado, corte, alvo fora das features, atraso de publicação |
+| `test_feature_catalog.py` | 29 | Somente KEEP e alvos, DROP fora da tabela final, alvos de 7/15/30/90 dias, publicação sem duplicar |
+| `test_dataset_versioning.py` | 22 | Checksum, checagens da matriz, versão imutável, falha não substitui nem apaga a última versão válida, piso configurável da janela |
+| `test_model_contract.py` | 25 | Metadados e consulta padrão do contrato, validação e registro das previsões por horizonte |
 | `test_pipeline.py` | 11 | Orquestrador: etapas e contagens, frescor registrado, corte, falha por etapa, erro inesperado, lock e conexão única do ciclo |
 | `test_jobs.py` | 29 | Horários e fuso, dia de corte de cada job, novas tentativas, códigos de saída e argumentos |
 | `test_scheduler.py` | 20 | Agendador APScheduler: gatilhos e fuso, tolerância de atraso (misfire), `coalesce`/`max_instances`, reinício sem duplicar, lock como barreira, falha que não derruba o processo, encerramento controlado e ponte do modo `--schedule` |
 | `test_django_integration.py` | 19 | Adaptador Django: precedência de configuração (explícita > Django > ambiente), validação de campos, conexão própria do ciclo, tradução de erros e leitura do Admin |
-| `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança (12), nenhum dado apagado e `raw`/`core` intactos (13), poda reversível |
+| `test_pruning.py` | 22 | Teto de 2 anos e mínimo de segurança, nenhum dado apagado e `raw`/`core` intactos, poda reversível |
 
-Os números entre parênteses são os **20 testes obrigatórios** do documento de especificação. 19 continuam aplicáveis: o teste de migração do SQLite deixou de existir em 23/10/2026, quando o projeto passou a operar somente com PostgreSQL (a coleta real cobre todo o período que a base legada cobria).
+A seção [Executar os testes](#11-executar-os-testes) indica quais testes precisam de um PostgreSQL acessível.
 
 ---
 
-## Contrato com o Time de ML
+## Contrato com o modelo
 
 O componente de rede neural **consome** a última versão válida:
 
@@ -440,25 +445,23 @@ Ver [`docs/model_contract.md`](docs/model_contract.md) para o contrato completo.
 
 ---
 
-## Banco de treino entregue
+## Versão de treino
 
-O banco `cafe_previsao` foi carregado em 23/10/2026 com dados reais e uma versão congelada para treino:
+O banco foi carregado em 23/10/2026 com dados reais e uma versão congelada para treino:
 
-- **Versão `v1.0.0-20261022`** — início em **2018-01-02** (primeiro ajuste publicado pela B3), corte em 2026-10-22, **3.216 linhas**, 19 features e checksum SHA-256 conferido. Os alvos ficam nulos apenas na borda final (7, 15, 30 e 90 dias, conforme o horizonte); nenhuma feature tem nulo.
+- **Versão `v1.0.0-20261022`**: início em **2018-01-02** (primeiro ajuste publicado pela B3), corte em 2026-10-22, **3.216 linhas**, 19 variáveis e checksum SHA-256 conferido. Os alvos ficam nulos apenas na borda final (7, 15, 30 e 90 dias, conforme o horizonte); nenhuma variável de entrada tem nulo.
 - `core.market_daily`: 2.320 datas (2017-10-23 a 2026-10-22); `core.weather_daily`: 9.858 linhas (3 regiões × 3.286 dias).
 - `raw`: 80.186 observações (11.201 de mercado e 68.985 de clima), todas rastreáveis à execução de ingestão.
-- Qualidade: 54 checagens CRITICAL e 30 WARNING aprovadas; 7 linhas de precipitação do cerrado (dez/2025 a mar/2026, valores incompatíveis) ficaram em quarentena em `raw` e não entram em `core`.
-- `DATASET_START_DATE=2018-01-02` mantém esse piso nas próximas versões construídas pelos jobs; sem ele, o recuo de 9 anos incluiria dias sem B3.
+- Qualidade: 54 checagens críticas e 30 de alerta aprovadas; 7 linhas de precipitação do Cerrado (dez/2025 a mar/2026, valores incompatíveis) ficaram em quarentena em `raw` e não entram em `core`.
+- `DATASET_START_DATE=2018-01-02` mantém esse piso nas versões seguintes; sem ele, o recuo de 9 anos incluiria dias sem B3.
 
-O dump compactado está em `backups/cafe_previsao_treino_20261023.dump` (formato custom do PostgreSQL, 2,6 MB) e foi validado restaurando em um banco temporário com contagens idênticas:
+O dump desse banco não é distribuído, porque inclui séries da B3 e do Yahoo Finance que não podem ser redistribuídas. A restauração de um dump está descrita no [runbook](docs/runbook.md#restaurar-o-dump-do-banco-de-treino).
 
-```bash
-createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
-pg_restore -h 127.0.0.1 -p 5432 -U postgres -d cafe_previsao \
-  --no-owner --no-privileges backups/cafe_previsao_treino_20261023.dump
-```
+---
 
-O banco anterior foi preservado como `cafe_previsao_backup_20261023`.
+## Artigo
+
+A pasta [`artigo/`](artigo) contém os scripts que reproduzem as análises, as tabelas e as figuras do artigo *Auditoria estatística de variáveis para a previsão do preço do café arábica: redundância regional, estrutura temporal e limites da correlação*, os resultados em JSON e as figuras em PDF. O [`artigo/README.md`](artigo/README.md) explica como gerar a base e rodar cada script.
 
 ---
 
@@ -468,6 +471,15 @@ O banco anterior foi preservado como `cafe_previsao_backup_20261023`.
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Fluxo dos 6 schemas, pipeline de 15 passos, locks e janela histórica |
 | [`docs/data_dictionary.md`](docs/data_dictionary.md) | Catálogo completo de variáveis (KEEP, TARGET, DROP) e modelagem das tabelas |
-| [`docs/model_contract.md`](docs/model_contract.md) | Contrato formal de integração com o time de ML, consulta SQL padrão e mock consumer |
+| [`docs/model_contract.md`](docs/model_contract.md) | Contrato com o modelo, consulta SQL padrão e consumidor simulado |
 | [`docs/runbook.md`](docs/runbook.md) | Operação diária, verificação de saúde, recuperação de falhas, reprocessamento e poda |
-| [`docs/TODO.md`](docs/TODO.md) | Estado de cada etapa, decisões em aberto e critérios de aceite |
+
+---
+
+## Licença
+
+O código está sob a [licença MIT](LICENSE). Os dados do CEPEA/ESALQ em `base/dados_manuais/` estão sob a licença [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) e exigem citação da fonte; o uso comercial não é permitido. As séries da B3 e do Yahoo Finance não são distribuídas.
+
+## Como citar
+
+Os dados de citação estão em [`CITATION.cff`](CITATION.cff).

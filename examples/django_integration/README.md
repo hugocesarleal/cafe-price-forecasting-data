@@ -1,4 +1,4 @@
-# Integração com Django — exemplos de fronteira
+# Exemplos de integração com Django
 
 O pipeline continua sendo uma **biblioteca externa**: o Django não ganha regra
 de negócio, não reimplementa o banco em ORM e não duplica o esquema. A fronteira
@@ -7,7 +7,7 @@ de negócio, não reimplementa o banco em ORM e não duplica o esquema. A fronte
 - monta a configuração canônica (`src.config.Settings`) com precedência
   **explícita > Django > ambiente/.env**;
 - abre a própria conexão psycopg do ciclo (`src.db.pipeline_connection`) e
-  mantém o advisory lock nela até o fim — **nunca** use a conexão gerenciada
+  mantém o advisory lock nela até o fim; **nunca** use a conexão gerenciada
   pelo ciclo de requests do Django para isso;
 - chama a função pública do pipeline (`run_pipeline` / `run_ingestion` /
   `run_dataset_build`) e devolve o dicionário com `run_id`, `status` e métricas;
@@ -55,10 +55,10 @@ run_pipeline_job(
 O esquema é criado **somente** pelas migrações SQL de `migrations/` (aplicadas pelo
 próprio pipeline: `python -m src.migrator`). Não crie migrations Django
 duplicadas para as mesmas tabelas: como `PipelineRun` é `managed = False`, o
-Django nem tenta criar nada — o modelo existe só para o Admin.
+Django nem tenta criar nada: o modelo existe só para o Admin.
 
 O campo "versão do pipeline" do painel usa `metadata->>'version_tag'`: o
-esquema de auditoria não tem coluna própria de versão — limitação documentada.
+esquema de auditoria não tem coluna própria de versão, uma limitação conhecida.
 
 ## Agendamento
 
@@ -66,4 +66,4 @@ esquema de auditoria não tem coluna própria de versão — limitação documen
 triggers de agendamento baixarem dados ou rodarem inferência: o disparo só
 chama o ciclo. Para o "quando rodar" já existe o agendador do próprio pipeline
 (`jobs/apscheduler_runner.py`, modo `--schedule`); quem preferir Celery Beat
-aponta a task de `celery_task.py` no beat e pronto — o corpo do job é o mesmo.
+aponta a task de `celery_task.py` no beat; o corpo do job é o mesmo.

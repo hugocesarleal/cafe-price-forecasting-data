@@ -1,8 +1,8 @@
 """Validações de qualidade executadas antes de publicar dados em staging/core.
 
-Regras do documento de especificação: nenhum dado inválido chega às tabelas de
-decisão, toda checagem é registrada em ``audit.data_quality_checks`` e uma falha
-CRÍTICA interrompe a publicação preservando o estado anterior de ``core``.
+Princípios: nenhum dado inválido chega às tabelas de decisão, toda checagem é
+registrada em ``audit.data_quality_checks`` e uma falha CRÍTICA interrompe a
+publicação preservando o estado anterior de ``core``.
 
 As checagens se dividem em dois grupos:
 

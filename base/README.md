@@ -1,4 +1,4 @@
-# Base de dados para previsão de preço do café — protótipo histórico
+# Base de dados para previsão de preço do café (protótipo histórico)
 
 > **Arquivo histórico, não é a arquitetura vigente.** Este README descreve o protótipo original em SQLite (`build_base_cafe.py`), mantido apenas como registro da fase de exploração. O pipeline atual usa **exclusivamente PostgreSQL** e está documentado no `README.md` da raiz e em `docs/architecture.md`; nenhum comando ou tabela descrito aqui é executado pela versão atual.
 
@@ -43,7 +43,7 @@ build_base_cafe.py
 
 ### 2.1 Coletores isolados
 
-Cada fonte é envolvida pelo decorator `@coletor`, que captura exceções. Se o CEPEA sair do ar, as outras oito fontes continuam sendo coletadas e a falha aparece no relatório final e na tabela `coleta_log` — em vez de o script morrer sem explicação.
+Cada fonte é envolvida pelo decorator `@coletor`, que captura exceções. Se o CEPEA sair do ar, as outras oito fontes continuam sendo coletadas e a falha aparece no relatório final e na tabela `coleta_log`, em vez de o script morrer sem explicação.
 
 ```bash
 python build_base_cafe.py --debug   # mostra o traceback completo das falhas
@@ -60,7 +60,7 @@ O comportamento é controlado pela constante `MODO_PREENCHIMENTO`, no topo do ar
 | `"periodo"` *(padrão)* | Propaga para frente **e para trás** dentro do período de referência. Um dado mensal de março preenche 01/03 a 31/03, mesmo tendo sido divulgado no dia 15. | Base de trabalho, exploração |
 | `"causal"` | Propaga apenas para frente. O valor só entra na base a partir do dia em que ficou público. | Backtest definitivo |
 
-**Por que os dois modos existem.** O modo `periodo` é mais intuitivo e é o que preenche "todos os dias do mês com aquele valor". Mas ele coloca na base do dia 1º de março uma informação que só existiu no dia 15 — o modelo enxerga o futuro. Isso infla o desempenho no backtest e não se sustenta em produção.
+**Por que os dois modos existem.** O modo `periodo` é mais intuitivo e é o que preenche "todos os dias do mês com aquele valor". Mas ele coloca na base do dia 1º de março uma informação que só existiu no dia 15, e o modelo enxerga o futuro. Isso infla o desempenho no backtest e não se sustenta em produção.
 
 Trocar uma palavra e rodar de novo permite comparar os dois. **Se o R² cair muito ao passar para `"causal"`, o resultado anterior era artefato de vazamento**, não capacidade preditiva.
 
@@ -70,9 +70,9 @@ Séries de mercado (preço, câmbio, futuros) não sofrem desse problema: elas s
 
 Calculadas depois do preenchimento, em três grupos:
 
-- **Clima** — acumulados de chuva (30d/90d), anomalia padronizada, contagem de dias frios e quentes, déficit hídrico aproximado, sequência de dias secos.
-- **Mercado** — retorno logarítmico, volatilidade realizada, conversão do ICE KC para R$/saca e a base local resultante, spread arábica-robusta.
-- **Calendário** — codificação cíclica do ano em seno/cosseno, fase fenológica, dummy de bienalidade, flag de risco de geada.
+- **Clima:** acumulados de chuva (30d/90d), anomalia padronizada, contagem de dias frios e quentes, déficit hídrico aproximado, sequência de dias secos.
+- **Mercado:** retorno logarítmico, volatilidade realizada, conversão do ICE KC para R$/saca e a base local resultante, spread arábica-robusta.
+- **Calendário:** codificação cíclica do ano em seno/cosseno, fase fenológica, dummy de bienalidade, flag de risco de geada.
 
 ---
 
@@ -92,13 +92,13 @@ Calculadas depois do preenchimento, em três grupos:
 
 ### Pontos climáticos
 
-O NASA POWER opera em grid de 0,5° (~55 km), então não faz sentido usar municípios vizinhos — cairiam na mesma célula.
+O NASA POWER opera em grid de 0,5° (~55 km), então não faz sentido usar municípios vizinhos, que cairiam na mesma célula.
 
 | Chave | Coordenada | Região |
 |---|---|---|
-| `bambui` | -20,01 / -45,98 | Bambuí/MG — região do projeto |
-| `sulmg` | -21,55 / -45,43 | Varginha/MG — Sul de Minas |
-| `cerrado` | -18,94 / -46,99 | Patrocínio/MG — Cerrado Mineiro |
+| `bambui` | -20,01 / -45,98 | Bambuí/MG, região do projeto |
+| `sulmg` | -21,55 / -45,43 | Varginha/MG, Sul de Minas |
+| `cerrado` | -18,94 / -46,99 | Patrocínio/MG, Cerrado Mineiro |
 
 Sul de Minas e Cerrado entram porque pesam muito mais na formação do Indicador CEPEA nacional do que o Centro-Oeste Mineiro.
 
@@ -106,7 +106,7 @@ Sul de Minas e Cerrado entram porque pesam muito mais na formação do Indicador
 
 ### 3.1 Por que o preço do café não vem do agrobr
 
-Esta é a decisão de arquitetura mais importante do projeto, e a que mais custou tempo para descobrir. **O preço do café — a variável-alvo — é a única série que não é coletada automaticamente.** Ela vem de um arquivo baixado à mão do CEPEA. O motivo não é preferência: o agrobr é incapaz de entregar essa série.
+Esta é a decisão de arquitetura mais importante do projeto, e a que mais custou tempo para descobrir. **O preço do café, a variável-alvo, é a única série que não é coletada automaticamente.** Ela vem de um arquivo baixado à mão do CEPEA. O motivo não é preferência: o agrobr é incapaz de entregar essa série.
 
 #### O sintoma
 
@@ -117,7 +117,7 @@ preco_arabica    1029 valores faltantes (93.9%)
 Preco arabica: R$ 1676.28 a R$ 1782.18
 ```
 
-Apenas 66 cotações em 1.096 dias. E a faixa de preço denunciava o problema: R$ 1.676 a R$ 1.782 é uma variação de 6%. O arábica de fato oscilou entre **R$ 779,90 e R$ 2.769,45** no mesmo período — mais de 3,5x. O que voltou foram os últimos dois meses, não três anos.
+Apenas 66 cotações em 1.096 dias. E a faixa de preço denunciava o problema: R$ 1.676 a R$ 1.782 é uma variação de 6%. O arábica de fato oscilou entre **R$ 779,90 e R$ 2.769,45** no mesmo período, mais de 3,5 vezes. O que voltou foram os últimos dois meses, não três anos.
 
 #### A causa, no código do agrobr
 
@@ -129,7 +129,7 @@ Três achados na leitura do pacote, que se somam:
 https://cepea.esalq.usp.br/br/indicador/cafe.aspx
 ```
 
-É a página pública do indicador, que exibe apenas as cotações mais recentes — cerca de 60. Não existe paginação nem parâmetro de período.
+É a página pública do indicador, que exibe apenas as cotações mais recentes, cerca de 60. Não existe paginação nem parâmetro de período.
 
 **2. A função de fetch não recebe datas.** A assinatura é:
 
@@ -141,7 +141,7 @@ async def fetch_indicador_page(
 ) -> FetchResult
 ```
 
-Não há `inicio` nem `fim`. Não é limitação de configuração — **não existe mecanismo para pedir um intervalo histórico à fonte**. Os parâmetros `inicio`/`fim` de `indicador()` são repassados apenas para `store.indicadores_query()`, que consulta o cache DuckDB local.
+Não há `inicio` nem `fim`. Não é limitação de configuração: **não existe mecanismo para pedir um intervalo histórico à fonte**. Os parâmetros `inicio`/`fim` de `indicador()` são repassados apenas para `store.indicadores_query()`, que consulta o cache DuckDB local.
 
 **3. A janela de busca é de 10 dias.** A constante `SOURCE_WINDOW_DAYS = 10` governa a função `_needs_fetch()`, que decide se vale ir à rede:
 
@@ -161,7 +161,7 @@ A própria documentação do agrobr declara a filosofia:
 
 O cache DuckDB **acumula ao longo do tempo**: quem roda o script todo dia por três anos termina com a série completa. Mas ele não reconstrói o passado. Numa instalação nova o cache está vazio, e o que se obtém é o que aquela única página mostra.
 
-Vale notar que isso afeta só o CEPEA. Fontes que servem séries históricas de verdade — BCB SGS, CFTC, NASA POWER, CONAB série histórica — retornam o intervalo completo numa requisição, e no script funcionam sem intervenção.
+Vale notar que isso afeta só o CEPEA. Fontes que servem séries históricas de verdade (BCB SGS, CFTC, NASA POWER, CONAB série histórica) retornam o intervalo completo numa requisição, e no script funcionam sem intervenção.
 
 #### A solução adotada
 
@@ -181,7 +181,7 @@ O custo é um passo manual. Como é feito uma vez por coleta e a alternativa é 
 
 Duas saídas.
 
-### 4.1 `cafe_centro_oeste_mg.db` — o banco
+### 4.1 `cafe_centro_oeste_mg.db`: o banco
 
 SQLite com **12 tabelas normalizadas**, exatamente as do diagrama ER (seção 3.2), criadas a partir do `schema.sql`.
 
@@ -200,9 +200,9 @@ SQLite com **12 tabelas normalizadas**, exatamente as do diagrama ER (seção 3.
 | `tb_enso` | ONI mensal e fase | ~36 |
 | `tb_coleta_log` | Proveniência de cada execução | 1 por fonte/execução |
 
-A gravação é **idempotente**: cada tabela tem constraint `UNIQUE` sobre suas chaves naturais, e o upsert usa `ON CONFLICT ... DO UPDATE SET col = COALESCE(excluded.col, tabela.col)`. Rodar o script duas vezes atualiza em vez de duplicar — verificado em teste. O `COALESCE` também garante que uma fonte que preenche parte das colunas não apague o que outra já gravou: PTAX e DXY escrevem ambos em `tb_cambio` sem conflito.
+A gravação é **idempotente**: cada tabela tem constraint `UNIQUE` sobre suas chaves naturais, e o upsert usa `ON CONFLICT ... DO UPDATE SET col = COALESCE(excluded.col, tabela.col)`. Rodar o script duas vezes atualiza em vez de duplicar, o que foi verificado em teste. O `COALESCE` também garante que uma fonte que preenche parte das colunas não apague o que outra já gravou: PTAX e DXY escrevem ambos em `tb_cambio` sem conflito.
 
-### 4.2 `base_modelo.csv` — a matriz do modelo
+### 4.2 `base_modelo.csv`: a matriz do modelo
 
 Gerada a partir da view `vw_cafe_diario`, com calendário diário preenchido e variáveis derivadas calculadas. Aproximadamente **1.096 linhas × 72 colunas**.
 
@@ -230,7 +230,7 @@ O preenchimento fica no Python de propósito: o SQLite não tem função de jane
 | `precip_mm_*`, `umidade_rel_*` | Por região | mm, % |
 | `radiacao_mj_*`, `vento_ms_*` | Por região | MJ/m², m/s |
 
-#### Variáveis derivadas — clima
+#### Variáveis derivadas de clima
 
 Sufixo `_bambui`, `_sulmg` ou `_cerrado`.
 
@@ -238,13 +238,13 @@ Sufixo `_bambui`, `_sulmg` ou `_cerrado`.
 |---|---|
 | `precip_30d_*`, `precip_90d_*` | Chuva acumulada na janela móvel |
 | `precip_90d_anom_*` | Z-score do acumulado contra a média do dia-do-ano |
-| `dias_frio_30d_*` | Dias com Tmín < 4 °C nos últimos 30 — risco de geada |
+| `dias_frio_30d_*` | Dias com Tmín < 4 °C nos últimos 30 (risco de geada) |
 | `tmin_min_30d_*` | Mínima absoluta da janela |
-| `dias_quente_30d_*` | Dias com Tmáx > 32 °C — estresse térmico |
+| `dias_quente_30d_*` | Dias com Tmáx > 32 °C (estresse térmico) |
 | `deficit_hidrico_60d_*` | Chuva menos evapotranspiração aproximada |
-| `dias_secos_seq_*` | Dias secos consecutivos — veranico |
+| `dias_secos_seq_*` | Dias secos consecutivos (veranico) |
 
-#### Variáveis derivadas — mercado e calendário
+#### Variáveis derivadas de mercado e calendário
 
 | Coluna | Descrição |
 |---|---|
@@ -261,7 +261,7 @@ Sufixo `_bambui`, `_sulmg` ou `_cerrado`.
 
 ### 4.3 Cobertura do schema
 
-Toda coluna do DDL é preenchida por algum coletor — **67 de 67**. Isso foi verificado por auditoria cruzando as colunas declaradas em `schema.sql` contra o que cada coletor de fato entrega, e não por inspeção visual.
+Toda coluna do DDL é preenchida por algum coletor: **67 de 67**. Isso foi verificado por auditoria cruzando as colunas declaradas em `schema.sql` contra o que cada coletor de fato entrega, e não por inspeção visual.
 
 Vale repetir essa auditoria sempre que uma coluna nova for adicionada ao schema. Uma tabela com colunas permanentemente nulas é pior que não ter a coluna: ela sugere ao leitor do diagrama que o dado existe.
 
@@ -279,7 +279,7 @@ Campos que exigem atenção especial, porque não vêm prontos da fonte:
 
 ## 5. Como executar
 
-### Passo 1 — Baixar o histórico do CEPEA (obrigatório)
+### Passo 1: baixar o histórico do CEPEA (obrigatório)
 
 A página de indicador que o agrobr raspa exibe apenas as **últimas ~60 cotações**. Os parâmetros `inicio`/`fim` filtram o que já foi baixado; não pedem mais histórico ao servidor. Para 3 anos é preciso usar o export oficial:
 
@@ -297,7 +297,7 @@ base_cafe/
     └── CEPEA_20260816101737.xls
 ```
 
-**Não é preciso renomear.** O script identifica cada série procurando as palavras `arabica` e `robusta`/`conillon` no nome do arquivo e, se não achar, no título interno da planilha — o export do CEPEA vem com nome genérico do tipo `CEPEA_20260816101737.xls`.
+**Não é preciso renomear.** O script identifica cada série procurando as palavras `arabica` e `robusta`/`conillon` no nome do arquivo e, se não achar, no título interno da planilha, porque o export do CEPEA vem com nome genérico do tipo `CEPEA_20260816101737.xls`.
 
 Havendo mais de um arquivo da mesma série na pasta, **o CSV tem preferência** sobre `.xlsx` e `.xls`. Para forçar um arquivo específico, preencha `ARQUIVOS_FIXOS` no topo do script:
 
@@ -316,7 +316,7 @@ Para `.xls`, o `xlrd` costuma falhar com `Workbook corruption` embora o arquivo 
 
 Além de resolver o problema técnico, essa é a **fonte primária**: procedência melhor que scraping, e mais defensável na metodologia do trabalho.
 
-### Passo 2 — Rodar
+### Passo 2: rodar
 
 ```bash
 pip install agrobr==1.1.0 yfinance
@@ -353,11 +353,11 @@ Antes de gastar 5-10 minutos coletando, o script testa todas as fontes e mostra 
 ======================================================================
 ```
 
-São verificadas três coisas por fonte: módulo Python instalado, arquivo local presente e host acessível na rede. Um HTTP 403 ou 404 conta como acessível — significa que o DNS resolveu e o servidor respondeu, então a fonte está no ar.
+São verificadas três coisas por fonte: módulo Python instalado, arquivo local presente e host acessível na rede. Um HTTP 403 ou 404 conta como acessível: significa que o DNS resolveu e o servidor respondeu, então a fonte está no ar.
 
 O diagnóstico também **propaga o efeito para as variáveis derivadas**: se o `ice_kc` falhar, ele avisa que `base_local` e `ice_kc_brl_saca` deixam de existir, porque dependem dele.
 
-Se houver qualquer problema, o script pede confirmação antes de prosseguir. Se a **variável-alvo** estiver indisponível, exibe alerta crítico — nesse caso a base não serve para treino.
+Se houver qualquer problema, o script pede confirmação antes de prosseguir. Se a **variável-alvo** estiver indisponível, exibe alerta crítico, e nesse caso a base não serve para treino.
 
 | Flag | Efeito |
 |---|---|
@@ -379,15 +379,15 @@ Tempo estimado: 3 a 10 minutos, dominado pelas três chamadas ao NASA POWER.
 
 ## 6. Limitações conhecidas
 
-**O CEPEA exige download manual para backfill.** A página de indicador serve apenas ~60 cotações recentes e a função de fetch do agrobr não aceita parâmetro de data — a janela de busca é de 10 dias. O cache DuckDB acumula histórico ao longo do tempo, mas não reconstrói o passado. Explicação completa na **seção 3.1**. Se o arquivo não estiver em `dados_manuais/`, o diagnóstico prévio avisa antes de coletar.
+**O CEPEA exige download manual para backfill.** A página de indicador serve apenas ~60 cotações recentes e a função de fetch do agrobr não aceita parâmetro de data, e a janela de busca é de 10 dias. O cache DuckDB acumula histórico ao longo do tempo, mas não reconstrói o passado. Explicação completa na **seção 3.1**. Se o arquivo não estiver em `dados_manuais/`, o diagnóstico prévio avisa antes de coletar.
 
 **O NOAA pode falhar por DNS.** O host do CPC nem sempre resolve e alguns firewalls corporativos bloqueiam o domínio. O coletor tenta três URLs diferentes (PSL e CPC), com parsers para os dois layouts de arquivo. Se todas falharem, a coluna `oni` simplesmente não é criada e o resto da base é gerado normalmente.
 
-**A janela de 3 anos é curta.** São ~156 semanas. Com horizonte de 13 semanas e dezenas de variáveis, o risco de overfitting é alto. Recomenda-se selecionar de 15 a 25 variáveis para o modelo, não usar todas as 70. O CEPEA tem série desde 1996 e o NASA POWER desde 1981 — como o download já é manual, estender a janela custa apenas mudar o período no formulário do CEPEA. É a mudança de maior impacto no projeto.
+**A janela de 3 anos é curta.** São ~156 semanas. Com horizonte de 13 semanas e dezenas de variáveis, o risco de overfitting é alto. Recomenda-se selecionar de 15 a 25 variáveis para o modelo, não usar todas as 70. O CEPEA tem série desde 1996 e o NASA POWER desde 1981; como o download já é manual, estender a janela custa apenas mudar o período no formulário do CEPEA. É a mudança de maior impacto no projeto.
 
 **A anomalia climática é fraca com 3 anos.** O z-score usa a média do dia-do-ano como referência, o que com 3 anos significa n=3 por dia. A variável funciona, mas ganha muito com histórico maior.
 
-**A base local é nacional, não de Bambuí.** O CEPEA só publica arábica para Mogiana e Sul de Minas; não existe indicador para o Centro-Oeste Mineiro. A coluna `base_local` mede o desvio do físico brasileiro contra o ICE. Para obter a base real da região seria preciso a série de preço de balcão de uma cooperativa ou corretora local — dado que não vem de API.
+**A base local é nacional, não de Bambuí.** O CEPEA só publica arábica para Mogiana e Sul de Minas; não existe indicador para o Centro-Oeste Mineiro. A coluna `base_local` mede o desvio do físico brasileiro contra o ICE. Para obter a base real da região seria preciso a série de preço de balcão de uma cooperativa ou corretora local, dado que não vem de API.
 
 **A regra de bienalidade é simplificada.** `ano % 2 == 0` é uma aproximação. Conferir contra `conab.serie_historica('cafe', ...)` antes de usar em produção.
 
@@ -401,7 +401,7 @@ Tempo estimado: 3 a 10 minutos, dominado pelas três chamadas ao NASA POWER.
 
 O agrobr é MIT, mas os dados pertencem às fontes originais.
 
-Os dados do **CEPEA/ESALQ são CC BY-NC 4.0** — uso não comercial, com **citação obrigatória**. Para pesquisa acadêmica não há impedimento, desde que a fonte seja creditada no trabalho. B3 e Notícias Agrícolas têm licenças de zona cinzenta; o agrobr emite um aviso na primeira chamada.
+Os dados do **CEPEA/ESALQ são CC BY-NC 4.0**: uso não comercial, com **citação obrigatória**. Para pesquisa acadêmica não há impedimento, desde que a fonte seja creditada no trabalho. B3 e Notícias Agrícolas têm licenças de zona cinzenta; o agrobr emite um aviso na primeira chamada.
 
 Referência completa: `docs/licenses.md` no repositório do agrobr.
 
@@ -409,7 +409,7 @@ Referência completa: `docs/licenses.md` no repositório do agrobr.
 
 ## 8. Reprodutibilidade
 
-Para congelar a base no dia do treino do modelo — útil se um revisor pedir para reproduzir os resultados:
+Para congelar a base no dia do treino do modelo, útil se um revisor pedir para reproduzir os resultados:
 
 ```python
 from agrobr.snapshots import create_snapshot

@@ -1,4 +1,4 @@
-"""Testes Obrigatórios 3, 4 e 5: idempotência, deduplicação e upsert.
+"""Idempotência, deduplicação e upsert.
 
 A mesma carga executada duas vezes não pode duplicar observações, features ou
 previsões. Verifica também que o upsert em ``core`` atualiza sem duplicar datas
@@ -52,7 +52,7 @@ def mercado(valores, variavel="preco_arabica", unit="R$/sc 60kg", source="STUB-T
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 3 — carga idempotente
+# Carga idempotente
 # ---------------------------------------------------------------------------
 
 def test_mesma_carga_duas_vezes_nao_duplica_nada(ingest_conn, executar_pipeline):
@@ -114,7 +114,7 @@ def test_cargas_repetidas_registram_ambas_as_execucoes(ingest_conn, executar_pip
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 5 — upsert sem duplicar
+# Upsert sem duplicar
 # ---------------------------------------------------------------------------
 
 def test_origem_alterada_atualiza_core_sem_duplicar_datas(ingest_conn, executar_pipeline):
@@ -174,7 +174,7 @@ def test_raw_acumula_por_carga_e_mantem_a_origem_de_cada_linha(ingest_conn, exec
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 4 — deduplicação na carga
+# Deduplicação na carga
 # ---------------------------------------------------------------------------
 
 def test_duplicidades_dentro_do_lote_sao_resolvidas_antes_de_staging(

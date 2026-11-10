@@ -1,16 +1,16 @@
-# Contrato de Integração de Dados — Componente de Rede Neural
+# Contrato de dados com o modelo de previsão
 
-## 1. Visão Geral do Contrato
+## 1. Visão geral
 
-Este documento formaliza o contrato de dados entre o **Componente de Dados (Engenharia de Dados)** e o **Componente de Previsão (Rede Neural / Machine Learning)**.
+Este documento descreve o contrato de dados entre o **pipeline de dados** e o **modelo de previsão** (rede neural).
 
-O componente de dados é o único responsável pela ingestão, limpeza, engenharia de features, preenchimento causal e versionamento imutável. O componente de rede neural é o consumidor dos dados preparados e o produtor das inferências nos 4 horizontes especificados.
+O pipeline cuida da ingestão, da limpeza, do cálculo das variáveis, do preenchimento causal e do versionamento. O modelo consome os dados preparados e devolve as previsões nos quatro horizontes.
 
 ---
 
-## 2. Horizontes Preditivos e Variável-Alvo
+## 2. Horizontes e variável-alvo
 
-- **Ativo-Alvo:** Café Arábica físico CEPEA/ESALQ (R$/saca 60kg).
+- **Alvo:** Indicador CEPEA/ESALQ do café arábica (R$/saca de 60 kg).
 - **Horizontes ($h$ em dias corridos):**
   - $h = 7$ dias (`y_7d`)
   - $h = 15$ dias (`y_15d`)
@@ -19,9 +19,9 @@ O componente de dados é o único responsável pela ingestão, limpeza, engenhar
 
 ---
 
-## 3. Acesso aos Dados Preparados (Consumo das Features)
+## 3. Leitura dos dados preparados
 
-### 3.1 Consulta Padrão da Última Versão Válida
+### 3.1 Consulta padrão da última versão válida
 O componente consumidor obtém o snapshot de treino/inferência por `src.model_contract.load_features(conn)`, que executa a consulta abaixo:
 
 ```sql
@@ -65,7 +65,7 @@ WHERE dv.is_valid = TRUE
 ORDER BY mf.data_ref ASC;
 ```
 
-### 3.2 Metadados da Versão Fornecidos ao Modelo
+### 3.2 Metadados da versão
 `src.model_contract.get_latest_dataset(conn)` devolve, da última versão válida:
 - `dataset_version_id` (UUID): Identificador único da versão imutável.
 - `version_tag` (VARCHAR): Ex. `'v1.0.0-20261022'`.
@@ -76,11 +76,11 @@ ORDER BY mf.data_ref ASC;
 - `sha256_checksum` (CHAR(64)): Hash dos dados para garantir reprodutibilidade matemática.
 - `columns`: nome e tipo de cada coluna entregue; `feature_columns` e `target_columns` separam entradas e alvos.
 - `horizons`: horizontes de previsão configurados.
-- `quality`: `{"status": "OK" | "WARNING", "alertas": [...]}` — checagens de alerta reprovadas na construção da versão. Falha crítica nunca aparece aqui: ela impede a versão de existir.
+- `quality`: `{"status": "OK" | "WARNING", "alertas": [...]}}`: checagens de alerta reprovadas na construção da versão. Falha crítica nunca aparece aqui: ela impede a versão de existir.
 
 ---
 
-## 4. Regras Anti-Leakage (Sem Vazamento de Futuro)
+## 4. Regras contra vazamento temporal
 
 1. Para qualquer data de corte $t$, $X_t$ contém **estritamente** dados conhecidos até o fechamento de $t$.
 2. O valor contemporâneo `preco_arabica(t)` **nunca** é fornecido como entrada em $X_t$ para prever $t$.
@@ -90,9 +90,9 @@ ORDER BY mf.data_ref ASC;
 
 ---
 
-## 5. Contrato de Retorno das Previsões
+## 5. Registro das previsões
 
-O componente de machine learning entrega as inferências a `src.model_contract.register_forecasts(conn, previsoes)`, que valida o lote e grava em `predictions.forecasts`:
+O modelo entrega as previsões a `src.model_contract.register_forecasts(conn, previsoes)`, que valida o lote e grava em `predictions.forecasts`:
 
 ```sql
 INSERT INTO predictions.forecasts (
@@ -141,9 +141,9 @@ Cada lote também gera uma linha em `audit.model_runs` por `(pipeline_run_id, mo
 
 ---
 
-## 6. Exemplo de Função Consumidora Simulada (Mock Consumer)
+## 6. Consumidor simulado
 
-Conforme estabelecido no prompt, **não** implementamos o modelo de rede neural real. A função consumidora simulada, para validação e testes contratuais, está em `src/model_contract.py`; `python -m src.model_contract` executa o ciclo completo (ler a última versão, prever, registrar). Em essência:
+O repositório não contém o modelo de previsão. Um consumidor simulado, usado para validar o contrato nos testes, está em `src/model_contract.py`; `python -m src.model_contract` executa o ciclo completo (ler a última versão, prever, registrar). Em essência:
 
 ```python
 """Exemplo de consumidor simulado de features e gerador de previsões fictícias."""

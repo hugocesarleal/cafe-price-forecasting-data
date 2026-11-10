@@ -1,4 +1,4 @@
-"""Testes Obrigatórios 9, 10 e 11: ingestão ponta a ponta, falhas e concorrência.
+"""Ingestão ponta a ponta, falhas e concorrência.
 
 Cobrem o caminho feliz (coleta → raw → validação → staging → core), a quarentena
 de linhas inválidas, o bloqueio de publicação em falha CRÍTICA, a política de
@@ -225,7 +225,7 @@ def test_aviso_nao_bloqueia_a_publicacao(ingest_conn, executar_pipeline):
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 9 — falha de conexão com a fonte
+# Falha de conexão com a fonte
 # ---------------------------------------------------------------------------
 
 def test_falha_de_conexao_encerra_a_execucao_como_failed(ingest_conn, executar_pipeline):
@@ -272,7 +272,7 @@ def test_falha_inesperada_tambem_audita_antes_de_propagar(ingest_conn):
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 10 — novas tentativas
+# Novas tentativas
 # ---------------------------------------------------------------------------
 
 def test_falha_persistente_esgota_as_tentativas_configuradas(ingest_conn, executar_pipeline):
@@ -308,7 +308,7 @@ def test_erro_que_nao_e_de_coleta_nao_tenta_de_novo(ingest_conn, executar_pipeli
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 11 — execução concorrente bloqueada
+# Execução concorrente bloqueada
 # ---------------------------------------------------------------------------
 
 def test_execucao_concorrente_e_bloqueada_pelo_advisory_lock(ingest_conn, executar_pipeline):

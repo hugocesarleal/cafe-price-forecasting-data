@@ -1,6 +1,6 @@
 """Adaptador configurável de coleta das fontes externas.
 
-Duas estratégias, conforme a especificação:
+Duas estratégias de coleta:
 
 * ``SimulatedAgrobrClient`` — usa os CSVs locais de ``base/dados_manuais`` para
   preços e gera clima/futuros sintéticos determinísticos. Serve para desenvolver

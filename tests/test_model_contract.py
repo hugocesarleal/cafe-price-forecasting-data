@@ -1,6 +1,6 @@
-"""Teste Obrigatório 19 e contrato com o componente de rede neural.
+"""Contrato com o componente de rede neural.
 
-* 19 — as previsões são registradas por horizonte, com versão do modelo, versão
+* as previsões são registradas por horizonte, com versão do modelo, versão
   do dataset e execução de origem, sem duplicar.
 
 Cobre também o lado de consumo: metadados da última versão válida e a consulta
@@ -196,7 +196,7 @@ def test_consulta_padrao_ignora_linhas_podadas_e_versoes_invalidas(ingest_conn, 
         mc.load_features(ingest_conn, versao_no_banco.dataset_version_id)
 
 
-# -- Teste Obrigatório 19 ---------------------------------------------------
+# -- Previsões registradas por horizonte -----------------------------------
 
 def test_previsoes_sao_registradas_por_horizonte(ingest_conn, core_no_banco, versao_no_banco):
     features = mc.load_features(ingest_conn)

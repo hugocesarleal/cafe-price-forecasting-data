@@ -1,4 +1,4 @@
-# Runbook — Operação, Recuperação e Reprocessamento
+# Runbook: operação, recuperação e reprocessamento
 
 Guia de quem opera o pipeline de dados no dia a dia. Para o desenho do sistema, veja [`architecture.md`](architecture.md); para o que o modelo consome e devolve, [`model_contract.md`](model_contract.md).
 
@@ -265,7 +265,7 @@ A poda é recusada, sem alterar nada, quando:
 
 A poda vale para a versão em que foi aplicada. Uma versão nova nasce com a janela inteira e, se a poda deve continuar, precisa ser aplicada de novo.
 
-> **Janela histórica**: decisão de 23/10/2026 — `core` guarda 9 anos (desde 2017-10-23) e a versão de treino começa em **2018-01-02**, primeiro dia com ajuste da B3. Nenhuma poda foi aplicada na versão entregue; se for aplicar uma, lembre que o mínimo de segurança de `DATASET_MIN_DAYS=1096` continua valendo.
+> **Janela histórica**: na versão de treino de 22/10/2026, `core` guarda 9 anos (desde 2017-10-23) e a versão começa em **2018-01-02**, primeiro dia com ajuste da B3. Nenhuma poda foi aplicada nessa versão; numa poda futura, o mínimo de `DATASET_MIN_DAYS=1096` continua valendo.
 
 ---
 
@@ -284,7 +284,7 @@ No `.env`, defina `AGROBR_MODE=real`. Então:
 python -m jobs.run_on_demand      # primeira carga e primeira versão
 ```
 
-Com `DATASET_START_DATE=2018-01-02` (valor usado na entrega), a versão começa no primeiro dia com ajuste da B3, mesmo que `core` tenha datas anteriores. Sem o piso, a versão recua os `HISTORICAL_YEARS` completos e as primeiras linhas ficam sem `b3_cafe_ajuste`.
+Com `DATASET_START_DATE=2018-01-02` (valor usado na versão de treino), a versão começa no primeiro dia com ajuste da B3, mesmo que `core` tenha datas anteriores. Sem o piso, a versão recua os `HISTORICAL_YEARS` completos e as primeiras linhas ficam sem `b3_cafe_ajuste`.
 
 A primeira carga baixa um arquivo da B3 por pregão: cerca de 4 segundos cada, **mais de 2 horas para os 9 anos**. O log mostra o progresso a cada 20 pregões. Pode interromper: o que já foi baixado está em `COLLECTION_CACHE_DIR` (`.cache/coleta/b3_icf_ajustes.csv`) e a execução seguinte continua dali. As outras fontes levam cerca de um minuto.
 
@@ -302,7 +302,7 @@ O projeto opera **somente com PostgreSQL**: a base legada em SQLite foi absorvid
 
 ### Restaurar o dump do banco de treino
 
-O dump entregue em 23/10/2026 (`backups/cafe_previsao_treino_20261023.dump`, formato custom, 2,6 MB) contém o banco completo: schemas, migrations aplicadas, `raw`, `core` e a versão `v1.0.0-20261022`.
+O dump de 23/10/2026 (`cafe_previsao_treino_20261023.dump`, formato custom, 2,6 MB) contém o banco completo: schemas, migrations aplicadas, `raw`, `core` e a versão `v1.0.0-20261022`. Ele não faz parte do repositório, porque inclui dados da B3 e do Yahoo Finance que não podem ser redistribuídos. Com o arquivo em `backups/`:
 
 ```bash
 createdb -h 127.0.0.1 -p 5432 -U postgres cafe_previsao
@@ -318,8 +318,6 @@ FROM features.dataset_versions;
 SELECT count(*) FROM core.market_daily;    -- 2320
 SELECT count(*) FROM features.model_features;  -- 3216
 ```
-
-O banco anterior à entrega está preservado como `cafe_previsao_backup_20261023`.
 
 ### Histórico do CEPEA
 

@@ -59,7 +59,7 @@ SCHEMA_SQL = "schema.sql"
 #
 #   "periodo" -> preenche TODOS os dias do periodo de referencia com o valor.
 #                Ex.: dado mensal de marco preenche 01/03 a 31/03.
-#                E o que foi pedido. Simples e intuitivo.
+#                Simples e intuitivo, mas antecipa informação.
 #
 #   "causal"  -> so preenche a partir da data em que o dado ficou publico.
 #                Ex.: COT de terca so aparece na base a partir da sexta.

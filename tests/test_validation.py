@@ -1,4 +1,4 @@
-"""Testes Obrigatórios 4, 6, 7 e 8: validações de qualidade antes de publicar.
+"""Validações de qualidade antes de publicar.
 
 Cobrem as 12 checagens de ``src/validation.py``: deduplicação, coluna ausente,
 tipo inválido e valor fora dos limites físicos, além das regras de data,
@@ -72,7 +72,7 @@ def test_kind_desconhecido_levanta_erro():
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 6 — coluna obrigatória ausente
+# Coluna obrigatória ausente
 # ---------------------------------------------------------------------------
 
 def test_coluna_obrigatoria_ausente_reprova_e_quarentena():
@@ -116,7 +116,7 @@ def test_regiao_e_obrigatoria_apenas_para_clima():
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 7 — tipo inválido
+# Tipo inválido
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("valor_ruim", ["não-numérico", "NaN", True, float("nan"), float("inf")])
@@ -141,7 +141,7 @@ def test_tipo_invalido_nao_passa_por_numero_valido():
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 8 — valor fora dos limites físicos
+# Valor fora dos limites físicos
 # ---------------------------------------------------------------------------
 
 def test_valor_fora_dos_limites_reprova():
@@ -205,7 +205,7 @@ def test_variavel_alvo_fora_dos_limites_nunca_e_tolerada():
 
 
 # ---------------------------------------------------------------------------
-# Teste Obrigatório 4 — deduplicação
+# Deduplicação
 # ---------------------------------------------------------------------------
 
 def test_chave_de_deduplicacao_por_tipo():

@@ -1,14 +1,14 @@
-# Dicionário de Dados e Catálogo de Variáveis
+# Dicionário de dados e catálogo de variáveis
 
-Este documento consolida a especificação do Catálogo de Variáveis (`features.variable_catalog`) e a modelagem detalhada das tabelas dos 6 schemas PostgreSQL.
+Este documento descreve o catálogo de variáveis (`features.variable_catalog`) e as tabelas dos seis schemas do PostgreSQL.
 
 ---
 
-## 1. Catálogo de Variáveis (`features.variable_catalog`)
+## 1. Catálogo de variáveis (`features.variable_catalog`)
 
 A tabela `features.variable_catalog` define a taxonomia, procedência e permissão de entrada na matriz final de treinamento (`features.model_features`).
 
-### Valores Válidos para `selection_status`:
+### Valores de `selection_status`
 - `KEEP`: Variável aprovada para a tabela final de features.
 - `TARGET`: Variável-alvo principal (`preco_arabica`).
 - `KEEP_WITH_CAVEAT`: Mantida em raw/core, mas **excluída** da matriz de features do modelo inicial.
@@ -16,13 +16,13 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 - `DROP`: Descartada das features do modelo; retida em raw/core para histórico ou auditoria.
 - `INTERNAL_INPUT`: Usada exclusivamente para derivação de outras variáveis (ex.: mínimas diárias brutas para calcular `tmin_min_30d`), mas não publicada isoladamente.
 
-> **Atraso de publicação do clima**: toda variável de clima, bruta ou calculada, entra na matriz de features com o atraso do NASA POWER — 3 dias (5 para `radiacao_mj_*`). "Últimos 30 dias" significa os 30 dias terminados em $t-3$. Ver `PUBLICATION_LAG_DAYS` em `src/feature_builder.py`.
+> **Atraso de publicação do clima**: toda variável de clima, bruta ou calculada, entra na matriz de features com o atraso do NASA POWER, de 3 dias (5 para `radiacao_mj_*`). "Últimos 30 dias" significa os 30 dias terminados em $t-3$. Ver `PUBLICATION_LAG_DAYS` em `src/feature_builder.py`.
 
-### Tabela do Catálogo
+### Tabela do catálogo
 
 | variable_name | source_group | source_name | unit | is_raw_available | is_required_for_feature_calculation | is_model_feature | selection_status | selection_reason |
 |---|---|---|---|---|---|---|---|---|
-| `preco_arabica` | mercado | CEPEA/ESALQ | R$/sc 60kg | TRUE | TRUE | FALSE | `TARGET` | Variável-alvo principal do MVP. Base das projeções y_7d, y_15d, y_30d, y_90d. Não entra contemporânea como feature. |
+| `preco_arabica` | mercado | CEPEA/ESALQ | R$/sc 60kg | TRUE | TRUE | FALSE | `TARGET` | Variável-alvo. Base das projeções y_7d, y_15d, y_30d, y_90d. Não entra contemporânea como feature. |
 | `preco_robusta` | mercado | CEPEA/ESALQ | R$/sc 60kg | TRUE | TRUE | TRUE | `KEEP` | Indicador CEPEA Conilon/Robusta. Substituição e correlação de mercado. |
 | `usd_brl` | mercado | BCB PTAX | BRL | TRUE | FALSE | TRUE | `KEEP` | Cotação PTAX Venda. Impacto direto na formação de preço para exportação. |
 | `b3_cafe_ajuste` | mercado | B3 | USD/sc | TRUE | FALSE | TRUE | `KEEP` | Preço de ajuste do contrato futuro ICF B3. |
@@ -93,11 +93,11 @@ A tabela `features.variable_catalog` define a taxonomia, procedência e permiss�
 | `fase_fenologica` | safra | Manual | categorico | FALSE | FALSE | FALSE | `DROP` | Descartada inicialmente. |
 | `risco_geada` | clima | Calculada | booleano | FALSE | FALSE | FALSE | `DROP` | Descartada inicialmente. |
 
-**Total semeado em `features.variable_catalog`:** 70 variáveis — 1 `TARGET`, 19 `KEEP`, 3 `INTERNAL_INPUT` e 47 `DROP`. Apenas as 19 `KEEP` são publicadas como features; os 4 alvos `y_*` são derivados de `preco_arabica` e gravados em `features.model_features`.
+**Total semeado em `features.variable_catalog`:** 70 variáveis: 1 `TARGET`, 19 `KEEP`, 3 `INTERNAL_INPUT` e 47 `DROP`. Apenas as 19 `KEEP` são publicadas como features; os 4 alvos `y_*` são derivados de `preco_arabica` e gravados em `features.model_features`.
 
 ---
 
-## 2. Modelagem Detalhada das Tabelas PostgreSQL
+## 2. Tabelas do PostgreSQL
 
 ### Schema: `raw`
 - **`raw.ingestion_files`**:

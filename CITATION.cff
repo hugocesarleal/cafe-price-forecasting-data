@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "Se usar este código, cite-o como abaixo."
+title: "Pipeline de dados para a previsão do preço do café arábica"
+type: software
+license: MIT
+repository-code: "https://github.com/hugocesarleal/cafe-price-forecasting-data"
+date-released: 2026-11-09
+authors:
+  - family-names: Duque
+    given-names: Gabriel Henrique Silva
+    affiliation: "Instituto Federal de Minas Gerais, Campus Bambuí"
+  - family-names: Leal
+    given-names: Hugo César
+    affiliation: "Instituto Federal de Minas Gerais, Campus Bambuí"
+  - family-names: Libânio e Sousa
+    given-names: Ian Mariano
+    affiliation: "Instituto Federal de Minas Gerais, Campus Bambuí"
+  - family-names: Oliveira
+    given-names: Bruno Alberto Soares
+    affiliation: "Instituto Federal de Minas Gerais, Campus Bambuí"
+  - family-names: Nametala
+    given-names: Ciniro Aparecido Leite
+    affiliation: "Instituto Federal de Minas Gerais, Campus Bambuí"
+keywords:
+  - café arábica
+  - previsão de preços
+  - engenharia de dados
+  - PostgreSQL
+  - CEPEA
