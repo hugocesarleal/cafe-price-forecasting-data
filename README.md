@@ -1,5 +1,7 @@
 # Pipeline de dados para a previsão do preço do café arábica
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24121145.svg)](https://doi.org/10.5281/zenodo.24121145)
+
 > **Variável-alvo:** Indicador CEPEA/ESALQ Café Arábica (R$/saca 60 kg)  
 > **Recorte geográfico:** região de Bambuí/MG, Centro-Oeste Mineiro  
 > **Horizontes de previsão:** 7, 15, 30 e 90 dias  
@@ -482,4 +484,6 @@ O código está sob a [licença MIT](LICENSE). Os dados do CEPEA/ESALQ em `base/
 
 ## Como citar
 
-Os dados de citação estão em [`CITATION.cff`](CITATION.cff).
+O repositório tem registro no Zenodo, com o DOI [10.5281/zenodo.24121145](https://doi.org/10.5281/zenodo.24121145). Os dados completos de citação estão em [`CITATION.cff`](CITATION.cff):
+
+> DUQUE, G. H. S.; LEAL, H. C.; LIBÂNIO E SOUSA, I. M.; OLIVEIRA, B. A. S.; NAMETALA, C. A. L. **Pipeline de dados para a previsão do preço do café arábica**. Versão 1.0.0. Zenodo, 2026. DOI: 10.5281/zenodo.24121145.

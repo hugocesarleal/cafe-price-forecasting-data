@@ -13,6 +13,7 @@ abstract: >-
   da auditoria estatística das variáveis.
 license: MIT
 repository-code: "https://github.com/hugocesarleal/cafe-price-forecasting-data"
+doi: 10.5281/zenodo.24121145
 version: 1.0.0
 date-released: 2026-11-10
 authors:
