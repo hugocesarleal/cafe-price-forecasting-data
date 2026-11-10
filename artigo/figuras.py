@@ -133,7 +133,7 @@ def fig_mapa_calor(b, pasta):
     ax.set_ylim(len(ordem) - 0.5, 0.5)
     ax.spines[:].set_visible(False)
     ax.tick_params(length=0)
-    cb = fig.colorbar(im, ax=ax, fraction=0.045, pad=0.02, format=fmt(1))
+    cb = fig.colorbar(im, ax=ax, fraction=0.045, pad=0.02, format=fmt(1), ticks=[-1, -0.5, 0, 0.5, 1])
     cb.set_label("correlação de Pearson")
     salvar(fig, pasta, "fig4_heatmap.pdf")
 
